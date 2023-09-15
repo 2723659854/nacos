@@ -1,0 +1,23 @@
+{
+    "name": "xiaosongshu/nacos",
+    "description": "简单的php版本nacos客户端",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Xiaosongshu\\Nacos\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "xiaosongshu",
+            "email": "2723659854@qq.com"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=7.0",
+        "guzzle/http": "^3.9",
+        "guzzlehttp/guzzle": "*"
+    }
+}
