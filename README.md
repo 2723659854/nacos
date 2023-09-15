@@ -6,7 +6,7 @@ composer require xiaosongshu/nacos
 ```
 ### 客户端提供的方法
 ```php 
-
+        require_once __DIR__.'/vendor/autoload.php';
         $dataId      = 'CalculatorService';
         $group       = 'api';
         $serviceName = 'mother';
@@ -15,7 +15,7 @@ composer require xiaosongshu/nacos
         /** 发布配置 */
         print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
         /** 获取配置 */
-        print_r($client->getConfig($dataId, $group));
+        print_r($client->getConfig($dataId, $group,'public'));
         /** 监听配置 */
         print_r($client->listenerConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
         /** 删除配置 */
