@@ -11,7 +11,7 @@ composer require xiaosongshu/nacos
         $group       = 'api';
         $serviceName = 'mother';
         $namespace   = 'public';
-        $client      = new \Xiaosongshu\Nacos\Client();
+        $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
         /** 发布配置 */
         print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
         /** 获取配置 */
