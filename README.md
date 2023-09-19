@@ -32,6 +32,8 @@ composer require xiaosongshu/nacos
         print_r($client->getInstanceList($serviceName, $namespace));
         /** 获取实例详情 */
         print_r($client->getInstanceDetail($serviceName, false, '192.168.4.110', '9504'));
+        /** 更新实例健康状态 */
+        print_r($client->updateInstanceHealthy($serviceName,  '192.168.4.110', '9504',false,));
         /** 发送心跳 */
         print_r($client->sendBeat($serviceName, '192.168.4.110', 9504, $namespace, false, 'beat'));
         /** 移除实例*/

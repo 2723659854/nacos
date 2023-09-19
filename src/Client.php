@@ -221,6 +221,19 @@ class Client
     }
 
     /**
+     * 更新实例健康状态
+     * @param string $serviceName
+     * @param string $ip
+     * @param string $port
+     * @param bool $healthy
+     * @return array
+     */
+    public function updateInstanceHealthy(string $serviceName,  string $ip, string $port,bool $healthy=true){
+        $data = ['serviceName' => $serviceName, 'healthy' => $healthy, 'ip' => $ip, 'port' => $port];
+        return $this->request('PUT','/nacos/v1/ns/health/instance',$data);
+    }
+
+    /**
      * 创建服务
      * @param string $serviceName
      * @param string $namespaceId
