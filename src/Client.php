@@ -193,11 +193,12 @@ class Client
      * 获取实例列表
      * @param string $serviceName
      * @param string|null $namespaceId
+     * @param bool $healthyOnly
      * @return array
      */
-    public function getInstanceList(string $serviceName, string $namespaceId = null)
+    public function getInstanceList(string $serviceName, string $namespaceId = null,bool $healthyOnly=false)
     {
-        $data = ['serviceName' => $serviceName,];
+        $data = ['serviceName' => $serviceName,'healthyOnly'=>$healthyOnly];
         if ($namespaceId) {
             $data['namespaceId'] = $namespaceId;
         }
