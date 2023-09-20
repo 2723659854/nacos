@@ -67,7 +67,8 @@ class Client
                 RequestOptions::FORM_PARAMS => $params,
                 RequestOptions::QUERY => ['accessToken' => $this->token]
             ];
-        } else {
+        }
+        else {
             $data = [
                 RequestOptions::QUERY => array_merge($params, ['accessToken' => $this->token]),
             ];
@@ -228,8 +229,14 @@ class Client
      * @param bool $healthy
      * @return array
      */
-    public function updateInstanceHealthy(string $serviceName,  string $ip, string $port,bool $healthy=true){
-        $data = ['serviceName' => $serviceName, 'healthy' => $healthy, 'ip' => $ip, 'port' => $port];
+    public function updateInstanceHealthy(string $serviceName, string $namespace, string $ip, string $port,bool $healthy=true){
+        $data = [
+            'port' => $port,
+            'healthy' => $healthy,
+            'ip' => $ip,
+            'serviceName' => $serviceName,
+            'namespaceId'=>$namespace,
+        ];
         return $this->request('PUT','/nacos/v1/ns/health/instance',$data);
     }
 
