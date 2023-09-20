@@ -67,8 +67,13 @@ class Client
                 RequestOptions::FORM_PARAMS => $params,
                 RequestOptions::QUERY => ['accessToken' => $this->token]
             ];
-        }
-        else {
+        }elseif (strtolower($method) == 'put'){
+            $data = [
+                RequestOptions::QUERY => array_merge($params, ['accessToken' => $this->token]),
+                RequestOptions::HEADERS=>['Content-type'=>'application/json'],
+                RequestOptions::JSON=>$params,
+            ];
+        } else {
             $data = [
                 RequestOptions::QUERY => array_merge($params, ['accessToken' => $this->token]),
             ];
