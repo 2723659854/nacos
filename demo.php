@@ -11,10 +11,10 @@ $namespace   = 'public';
 $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
 var_dump("发布配置");
 /** 发布配置 */
-//print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
+print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
 var_dump("获取配置需要稍等一秒左右，否则是404");
 /** 获取配置 */
-//print_r($client->getConfig($dataId, $group,'public'));
+print_r($client->getConfig($dataId, $group,'public'));
 
 var_dump("监听配置是否发生了变化，有变化则有返回值，无变化则返回空,同时监听配置会阻塞1秒左右");
 /** 监听配置 */

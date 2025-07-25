@@ -5,7 +5,11 @@ use GuzzleHttp\RequestOptions;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Client as HttpClient;
 
-
+/**
+ * @purpose nacos客户端
+ * @author yanglong
+ * @time 2025年7月25日11:44:02
+ */
 class Client
 {
 
