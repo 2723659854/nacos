@@ -163,11 +163,12 @@ class JsonRpcClient
                 throw new \Exception("创建连接失败：" . socket_strerror(socket_last_error()));
             }
 
-            // 设置超时
+            // 设置接收超时（SO_RCVTIMEO）
             socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0
             ]);
+            // 设置发送超时（SO_SNDTIMEO）
             socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0
@@ -178,13 +179,14 @@ class JsonRpcClient
             if ($connectResult === false) {
                 throw new \Exception("无法连接到实例（{$instance['ip']}:{$instance['port']}）：" . socket_strerror(socket_last_error($socket)));
             }
-
+            // 单独保存请求id
+            $requestId = uniqid('rpc_');
             // 构建JSON-RPC请求
             $request = [
                 'jsonrpc' => '2.0',
                 'method' => $method,
                 'params' => $params,
-                'id' => uniqid('rpc_')
+                'id' => $requestId
             ];
             $requestJson = json_encode($request) . "\n";
 
@@ -195,8 +197,6 @@ class JsonRpcClient
             }
 
             // 接收响应
-            //$responseJson = socket_read($socket, 4096);
-
             $responseJson = '';
             $timeout = time() + $this->timeout; // 超时时间
             while (time() < $timeout) {
@@ -222,6 +222,11 @@ class JsonRpcClient
             $response = json_decode(trim($responseJson), true);
             if (json_last_error() !== JSON_ERROR_NONE) {
                 throw new \Exception("响应格式错误：{$responseJson}");
+            }
+
+            // 新增：校验响应id与请求id一致
+            if ($response['id'] !== $requestId) {
+                throw new \Exception("响应id不匹配（请求id：{$requestId}，响应id：{$response['id']}）");
             }
 
             // 处理服务端响应
