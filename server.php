@@ -1,6 +1,5 @@
 <?php
 
-// 启动脚本（start.php）
 require_once __DIR__.'/vendor/autoload.php';
 require_once __DIR__."/samples/DemoService.php";
 require_once __DIR__."/samples/LoginService.php";
