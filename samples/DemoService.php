@@ -10,12 +10,27 @@ class DemoService
 {
 
     /**
-     * 提供一个加法
-     * @param int $a 第一个参数
-     * @param int $b 第二个参数
-     * @return int 返回一个整型值
+     * 示例方法：添加用户信息
+     * @param string $name 姓名
+     * @param int $age 年龄
+     * @return string
      */
-    public function add(int $a,int $b){
-        return $a + $b;
+    public function add(string $name, int $age): string
+    {
+        return "用户添加成功！姓名：{$name}，年龄：{$age}（服务端处理时间：" . date('H:i:s') . "）";
+    }
+
+    /**
+     * 示例方法：获取用户信息
+     * @param string $name 姓名
+     * @return array
+     */
+    public function get(string $name): array
+    {
+        return [
+            'name' => $name,
+            'age' => 25,
+            'message' => "查询成功（服务端时间：" . date('H:i:s') . "）"
+        ];
     }
 }

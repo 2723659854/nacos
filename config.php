@@ -37,6 +37,7 @@ return [
             'serviceName'=>\Xiaosongshu\Nacos\Samples\DemoService::class,
             'namespace'=>'public',
             'metadata'=>['method'=>'add','params'=>json_encode([['type'=>'string','name'=>'name'],['type'=>'int','name'=>'age']]),],
+            'heartbeat_interval'=>5
         ]
     ]
 ];
