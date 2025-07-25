@@ -13,7 +13,7 @@ https://github.com/2723659854/nacos
 <?php
 
 require_once __DIR__.'/vendor/autoload.php';
-require_once __DIR__.'/src/Client.php';
+
 
 $dataId      = 'CalculatorService';
 $group       = 'api';
@@ -77,7 +77,6 @@ print_r($client->removeInstance($serviceName, '192.168.4.110', 9505, $namespace,
 <?php
 
 require_once __DIR__.'/vendor/autoload.php';
-require_once __DIR__.'/src/Client.php';
 
 $dataId      = 'CalculatorService';
 $group       = 'api';
@@ -113,8 +112,8 @@ php listen.php
 <?php
 
 require_once __DIR__.'/vendor/autoload.php';
-require_once __DIR__."/samples/DemoService.php";
-require_once __DIR__."/samples/LoginService.php";
+require_once __DIR__."/DemoService.php";
+require_once __DIR__."/LoginService.php";
 
 use Xiaosongshu\Nacos\Server;
 
@@ -126,9 +125,10 @@ $config = require 'config.php';
 try{
     $server = new Server($config);
     $server->run();
-}catch (Throwable $exception){
-    var_dump($exception->getMessage());
+}catch (\Throwable $exception){
+    var_dump($exception->getMessage(),$exception->getLine(),$exception->getFile());
 }
+
 ```
 其中配置文件config.php，内容如下：
 ```php
@@ -290,8 +290,6 @@ php server.php
 
 // 使用示例
 require_once __DIR__ . '/vendor/autoload.php';
-require_once __DIR__ . "/src/Client.php";
-require_once __DIR__ . "/src/JsonRpcClient.php";
 
 use Xiaosongshu\Nacos\JsonRpcClient;
 
@@ -426,8 +424,10 @@ Array
 调用的服务实例：192.168.110.72:8000
 
 ```
+以上代码亲测可用，当然你可能需要根据你的实际业务调整一下才行。
+<br>
 
-以上就是全部用法，你可以将此服务集成到现有的框架中，比如thinkphp，laravel，webman等等。我为什么要这么写呢？因为我们的项目是tp3.2+tp5.1+webman2混合在一起的。
+以上就是全部用法，你可以将此服务集成到现有的框架中，比如thinkphp，laravel，webman等等。我为什么要这么写呢？因为我们的项目是tp3.2+tp5.1+webman2和laravel混合在一起的。
 #### 写在最后的话
-我是新手，我感觉这么写好像不对。但是又不知道具体哪里不对。对nacos不是很清除。有高手可以帮忙修改一下吗？
+我是菜鸟，我感觉这么写好像不对，但是又不知道具体哪里不对。对nacos不是很清除。求高手帮忙修改。
 

@@ -256,27 +256,27 @@ class JsonRpcClient
         $socket = null;
         try {
             // 创建套接字
-            $socket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+            $socket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
             if ($socket === false) {
-                throw new \Exception("创建连接失败：" . socket_strerror(socket_last_error()));
+                throw new \Exception("创建连接失败：" . \socket_strerror(\socket_last_error()));
             }
 
             // 设置接收超时
-            socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
+            \socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0
             ]);
 
             // 设置发送超时
-            socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, [
+            \socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0
             ]);
 
             // 连接实例
-            $connectResult = socket_connect($socket, $instance['ip'], $instance['port']);
+            $connectResult = \socket_connect($socket, $instance['ip'], $instance['port']);
             if ($connectResult === false) {
-                throw new \Exception("无法连接到实例（{$instance['ip']}:{$instance['port']}）：" . socket_strerror(socket_last_error($socket)));
+                throw new \Exception("无法连接到实例（{$instance['ip']}:{$instance['port']}）：" . \socket_strerror(\socket_last_error($socket)));
             }
 
             // 构建JSON-RPC请求
@@ -290,16 +290,16 @@ class JsonRpcClient
             $requestJson = json_encode($request, JSON_UNESCAPED_UNICODE) . "\n";
 
             // 发送请求
-            $sendResult = socket_write($socket, $requestJson);
+            $sendResult = \socket_write($socket, $requestJson);
             if ($sendResult === false) {
-                throw new \Exception("发送请求失败：" . socket_strerror(socket_last_error($socket)));
+                throw new \Exception("发送请求失败：" . \socket_strerror(\socket_last_error($socket)));
             }
 
             // 接收响应（循环读取直到完整）
             $responseJson = '';
             $timeout = time() + $this->timeout;
             while (time() < $timeout) {
-                $buffer = socket_read($socket, 4096);
+                $buffer = \socket_read($socket, 4096);
                 if ($buffer === false) {
                     usleep(100000);
                     continue;
@@ -343,7 +343,7 @@ class JsonRpcClient
 
         } finally {
             if ($socket) {
-                socket_close($socket);
+                \socket_close($socket);
             }
         }
     }

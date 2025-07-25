@@ -162,7 +162,7 @@ class Server
             foreach ($method->getParameters() as $param) {
                 $params[] = [
                     'name' => $param->getName(),
-                    'type' => $param->getType() ? (string)$param->getType() : 'mixed',
+                    'type' => $param->getType() ? @(string)$param->getType() : 'mixed',
                     'required' => !$param->isOptional()
                 ];
             }
@@ -269,20 +269,20 @@ class Server
         $ip = $this->instanceConfig['ip'];
         $port = $this->instanceConfig['port'];
 
-        $this->serverSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        $this->serverSocket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($this->serverSocket === false) {
-            throw new Exception("创建TCP套接字失败：" . socket_strerror(socket_last_error()));
+            throw new Exception("创建TCP套接字失败：" . \socket_strerror(\socket_last_error()));
         }
 
-        socket_set_nonblock($this->serverSocket);
-        socket_set_option($this->serverSocket, SOL_SOCKET, SO_REUSEADDR, 1);
+        \socket_set_nonblock($this->serverSocket);
+        \socket_set_option($this->serverSocket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        if (socket_bind($this->serverSocket, '0.0.0.0', $port) === false) {
-            throw new Exception("绑定端口失败（{$ip}:{$port}）：" . socket_strerror(socket_last_error($this->serverSocket)));
+        if (\socket_bind($this->serverSocket, '0.0.0.0', $port) === false) {
+            throw new Exception("绑定端口失败（{$ip}:{$port}）：" . \socket_strerror(\socket_last_error($this->serverSocket)));
         }
 
-        if (socket_listen($this->serverSocket, 100) === false) {
-            throw new Exception("监听端口失败（{$ip}:{$port}）：" . socket_strerror(socket_last_error($this->serverSocket)));
+        if (\socket_listen($this->serverSocket, 100) === false) {
+            throw new Exception("监听端口失败（{$ip}:{$port}）：" . \socket_strerror(\socket_last_error($this->serverSocket)));
         }
 
         echo "[TCP服务] 已启动，监听：{$ip}:{$port}（JSON-RPC协议）\n";
@@ -353,11 +353,11 @@ class Server
             $except[] = $clientSocket;
         }
 
-        $activity = socket_select($read, $write, $except, 1);
+        $activity = \socket_select($read, $write, $except, 1);
         if ($activity === false) {
-            $errorCode = socket_last_error();
-            if ($errorCode != SOCKET_EINTR) {
-                echo "[TCP] select错误：" . socket_strerror($errorCode) . "\n";
+            $errorCode = \socket_last_error();
+            if ($errorCode != \SOCKET_EINTR) {
+                echo "[TCP] select错误：" . \socket_strerror($errorCode) . "\n";
             }
             return;
         }
@@ -394,16 +394,16 @@ class Server
      */
     private function handleNewConnection()
     {
-        $newClient = socket_accept($this->serverSocket);
+        $newClient = \socket_accept($this->serverSocket);
         if ($newClient === false) {
             return;
         }
 
-        socket_getpeername($newClient, $clientIp, $clientPort);
+        \socket_getpeername($newClient, $clientIp, $clientPort);
         $clientId = (int)$newClient;
         $clientAddr = "{$clientIp}:{$clientPort}";
 
-        socket_set_nonblock($newClient);
+        \socket_set_nonblock($newClient);
 
         $this->clients[$clientId] = $newClient;
         $this->clientAddresses[$clientId] = $clientAddr;
@@ -420,10 +420,10 @@ class Server
         $clientId = (int)$socket;
         $clientAddr = $this->clientAddresses[$clientId] ?? "未知";
 
-        $data = socket_read($socket, 4096);
+        $data = \socket_read($socket, 4096);
         if ($data === false) {
-            $errorCode = socket_last_error($socket);
-            $errorMsg = in_array($errorCode, [SOCKET_ECONNRESET, SOCKET_ETIMEDOUT])
+            $errorCode = \socket_last_error($socket);
+            $errorMsg = in_array($errorCode, [\SOCKET_ECONNRESET, \SOCKET_ETIMEDOUT])
                 ? "Client closed connection or timeout"
                 : "Read error (code: {$errorCode})";
             echo "[TCP] 读取错误（{$clientAddr}）：{$errorMsg}\n";
@@ -452,10 +452,10 @@ class Server
 
         while (!empty($this->writeBuffers[$clientId])) {
             $response = array_shift($this->writeBuffers[$clientId]);
-            $bytesWritten = socket_write($socket, $response);
+            $bytesWritten = \socket_write($socket, $response);
 
             if ($bytesWritten === false) {
-                echo "[TCP] 发送失败（{$clientAddr}）：" . socket_strerror(socket_last_error($socket)) . "\n";
+                echo "[TCP] 发送失败（{$clientAddr}）：" . \socket_strerror(\socket_last_error($socket)) . "\n";
                 $this->closeClient($socket);
                 break;
             }
@@ -627,7 +627,7 @@ class Server
     {
         $clientId = (int)$socket;
         if (isset($this->clients[$clientId])) {
-            socket_close($this->clients[$clientId]);
+            \socket_close($this->clients[$clientId]);
             unset(
                 $this->clients[$clientId],
                 $this->writeBuffers[$clientId],
@@ -657,12 +657,12 @@ class Server
 
         // 关闭客户端连接
         foreach ($this->clients as $socket) {
-            socket_close($socket);
+            \socket_close($socket);
         }
 
         // 关闭TCP服务
         if ($this->serverSocket) {
-            socket_close($this->serverSocket);
+            \socket_close($this->serverSocket);
         }
 
         echo "[退出] 资源清理完成\n";
