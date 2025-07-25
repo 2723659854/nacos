@@ -6,15 +6,18 @@ use GuzzleHttp\Exception\GuzzleException;
 
 /**
  * 基于Nacos服务发现的JSON-RPC客户端
- * 自动从Nacos获取服务实例，无需硬编码服务地址
+ * 核心特性：通过服务标识调用、自动发现服务实例、隐藏实现细节
  */
 class JsonRpcClient
 {
     /** @var Client Nacos客户端实例 */
     private $nacosClient;
 
-    /** @var string 服务名称 */
-    private $serviceName;
+    /** @var string 服务标识（如demo） */
+    private $serviceKey;
+
+    /** @var string Nacos中的安全服务名（如SERVICE@@demo） */
+    private $nacosServiceName;
 
     /** @var string 命名空间 */
     private $namespace;
@@ -32,14 +35,14 @@ class JsonRpcClient
     private $lastInstanceFetchTime = 0;
 
     /**
-     * 构造函数：初始化Nacos连接信息
+     * 构造函数：初始化Nacos连接和服务标识
      * @param array $nacosConfig Nacos配置：host, username, password
-     * @param string $serviceName 要调用的服务名称
+     * @param string $serviceKey 服务标识（如demo）
      * @param string $namespace 命名空间，默认public
      * @param int $timeout 超时时间（秒）
      * @throws \Exception
      */
-    public function __construct(array $nacosConfig, string $serviceName, string $namespace = 'public', int $timeout = 5)
+    public function __construct(array $nacosConfig, string $serviceKey, string $namespace = 'public', int $timeout = 5)
     {
         // 初始化Nacos客户端
         $this->nacosClient = new Client(
@@ -48,32 +51,45 @@ class JsonRpcClient
             $nacosConfig['password'] ?? 'nacos'
         );
 
-        $this->serviceName = $serviceName;
+        $this->serviceKey = $serviceKey;
+        $this->nacosServiceName = $this->generateSafeNacosName($serviceKey); // 生成安全服务名
         $this->namespace = $namespace;
         $this->timeout = $timeout;
+    }
+
+    /**
+     * 生成安全的Nacos服务名（与服务端保持一致）
+     * @param string $serviceKey 服务标识
+     * @return string 安全服务名
+     */
+    private function generateSafeNacosName(string $serviceKey): string
+    {
+        $safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '', $serviceKey);
+        return "SERVICE@@{$safeKey}";
     }
 
     /**
      * 核心方法：调用服务方法
      * @param string $method 方法名（如add）
      * @param array $params 方法参数
-     * @return array 统一返回格式
+     * @return array 统一返回格式：
+     *               - 成功：['success' => true, 'result' => ..., 'instance' => ...]
+     *               - 失败：['success' => false, 'error' => ...]
      */
     public function request(string $method, array $params = []): array
     {
         try {
-            // 1. 获取可用的服务实例（从Nacos）
+            // 获取可用实例
             $instance = $this->getAvailableInstance();
             if (!$instance) {
                 return [
                     'success' => false,
-                    'error' => "未找到可用的{$this->serviceName}服务实例"
+                    'error' => "未找到可用的{$this->serviceKey}服务实例"
                 ];
             }
 
-            // 2. 调用具体实例
-            $result = $this->callInstance($instance, $method, $params);
-            return $result;
+            // 调用实例方法（方法名格式：服务标识.方法名）
+            return $this->callInstance($instance, "{$this->serviceKey}.{$method}", $params);
 
         } catch (\Exception $e) {
             return [
@@ -84,13 +100,13 @@ class JsonRpcClient
     }
 
     /**
-     * 从Nacos获取可用的服务实例
-     * @return array|null 服务实例信息（ip, port等）
+     * 获取可用的服务实例（从Nacos）
+     * @return array|null 实例信息
      * @throws GuzzleException
      */
     private function getAvailableInstance(): ?array
     {
-        // 检查缓存是否过期，过期则重新获取
+        // 缓存过期则刷新
         $now = time();
         if ($now - $this->lastInstanceFetchTime > $this->instanceCacheExpire) {
             $this->fetchInstancesFromNacos();
@@ -106,17 +122,21 @@ class JsonRpcClient
             return null;
         }
 
-        // 简单负载均衡：随机选择一个健康实例
+        // 简单负载均衡：随机选择
         return $healthyInstances[array_rand($healthyInstances)];
     }
 
     /**
-     * 从Nacos获取服务实例列表
+     * 从Nacos获取实例列表
      * @throws GuzzleException
      */
     private function fetchInstancesFromNacos()
     {
-        $response = $this->nacosClient->getInstanceList($this->serviceName, $this->namespace, true);
+        $response = $this->nacosClient->getInstanceList(
+            $this->nacosServiceName,
+            $this->namespace,
+            true
+        );
 
         if (isset($response['error'])) {
             throw new \Exception("从Nacos获取实例失败：{$response['error']}");
@@ -127,9 +147,9 @@ class JsonRpcClient
     }
 
     /**
-     * 调用具体的服务实例
-     * @param array $instance 服务实例信息
-     * @param string $method 方法名
+     * 调用具体实例
+     * @param array $instance 实例信息
+     * @param string $method 方法名（服务标识.方法名）
      * @param array $params 参数
      * @return array 调用结果
      */
@@ -153,10 +173,10 @@ class JsonRpcClient
                 'usec' => 0
             ]);
 
-            // 连接服务实例
+            // 连接实例
             $connectResult = socket_connect($socket, $instance['ip'], $instance['port']);
             if ($connectResult === false) {
-                throw new \Exception("无法连接到服务实例（{$instance['ip']}:{$instance['port']}）：" . socket_strerror(socket_last_error($socket)));
+                throw new \Exception("无法连接到实例（{$instance['ip']}:{$instance['port']}）：" . socket_strerror(socket_last_error($socket)));
             }
 
             // 构建JSON-RPC请求
@@ -175,7 +195,25 @@ class JsonRpcClient
             }
 
             // 接收响应
-            $responseJson = socket_read($socket, 4096);
+            //$responseJson = socket_read($socket, 4096);
+
+            $responseJson = '';
+            $timeout = time() + $this->timeout; // 超时时间
+            while (time() < $timeout) {
+                $buffer = socket_read($socket, 4096);
+                if ($buffer === false) {
+                    // 非阻塞无数据时短暂等待
+                    usleep(100000);
+                    continue;
+                }
+                $responseJson .= $buffer;
+                // 响应以换行结束（服务端响应末尾添加了\n）
+                if (strpos($responseJson, "\n") !== false) {
+                    break;
+                }
+            }
+            $responseJson = trim($responseJson);
+
             if ($responseJson === false) {
                 throw new \Exception("接收响应失败：" . socket_strerror(socket_last_error($socket)));
             }
@@ -183,20 +221,21 @@ class JsonRpcClient
             // 解析响应
             $response = json_decode(trim($responseJson), true);
             if (json_last_error() !== JSON_ERROR_NONE) {
-                throw new \Exception("服务端响应格式错误：{$responseJson}");
+                throw new \Exception("响应格式错误：{$responseJson}");
             }
 
             // 处理服务端响应
             if (isset($response['error'])) {
                 return [
                     'success' => false,
-                    'error' => "服务端错误：{$response['error']['message']}（错误码：{$response['error']['code']}）"
+                    'error' => "服务端错误：{$response['error']['message']}（错误码：{$response['error']['code']}）",
+                    'instance' => "{$instance['ip']}:{$instance['port']}"
                 ];
             } else {
                 return [
                     'success' => true,
                     'result' => $response['result'],
-                    'instance' => "{$instance['ip']}:{$instance['port']}" // 附加调用的实例信息
+                    'instance' => "{$instance['ip']}:{$instance['port']}"
                 ];
             }
 
@@ -209,7 +248,7 @@ class JsonRpcClient
     }
 
     /**
-     * 强制刷新服务实例列表（不使用缓存）
+     * 强制刷新实例列表
      * @throws GuzzleException
      */
     public function refreshInstances()

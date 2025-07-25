@@ -4,7 +4,7 @@ return [
 
     /** 连接服务器的基本配置 */
     'server'=>[
-        'host'=>'http://192.168.4.110:8848',
+        'host'=>'http://192.168.110.72:8848',
         'username'=>'nacos',
         'password'=>'nacos',
     ],
@@ -36,7 +36,7 @@ return [
             'enable'=>true,
             'serviceName'=>\Xiaosongshu\Nacos\Samples\DemoService::class,
             'namespace'=>'public',
-            'metadata'=>['method'=>'add','params'=>json_encode([['type'=>'string','name'=>'name'],['type'=>'int','name'=>'age']]),],
+            'metadata'=>['method'=>'add','params'=>json_encode([['type'=>'string','name'=>'name'],['type'=>'int','name'=>'age']]),'description' => '示例服务'],
             'heartbeat_interval'=>5
         ]
     ]

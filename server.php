@@ -10,5 +10,10 @@ use Xiaosongshu\Nacos\Server;
 $config = require 'config.php';
 
 // 启动服务
-$server = new Server($config);
-$server->run();
+
+try{
+    $server = new Server($config);
+    $server->run();
+}catch (Throwable $exception){
+    var_dump($exception->getMessage());
+}

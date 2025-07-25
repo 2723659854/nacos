@@ -11,10 +11,10 @@ $namespace   = 'public';
 $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
 var_dump("发布配置");
 /** 发布配置 */
-print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
+//print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
 var_dump("获取配置需要稍等一秒左右，否则是404");
 /** 获取配置 */
-print_r($client->getConfig($dataId, $group,'public'));
+//print_r($client->getConfig($dataId, $group,'public'));
 
 var_dump("监听配置是否发生了变化，有变化则有返回值，无变化则返回空,同时监听配置会阻塞1秒左右");
 /** 监听配置 */
@@ -42,9 +42,9 @@ var_dump("查看这个服务的详细信息");
 
 var_dump("给临时实例发送一次心跳，发送心跳的参数必须和创建实例的参数一致才可以，否则实例不健康");
 /** 发送心跳 */
-//sleep(1);print_r($client->sendBeat($serviceName, '192.168.4.110', '9506', $namespace,['name' => 'tom', 'age' => 15], true,50));
+sleep(1);print_r($client->sendBeat($serviceName, '192.168.4.110', '9506', $namespace,['name' => 'tom', 'age' => 15], true,50));
 var_dump("发送心跳之后，再次获取实例列表，确认健康状态");
-//print_r($client->getInstanceList($serviceName, $namespace));
+print_r($client->getInstanceList($serviceName, $namespace));
 
 var_dump("获取实例的详情");
 
