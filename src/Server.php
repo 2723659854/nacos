@@ -5,7 +5,6 @@ namespace Xiaosongshu\Nacos;
 use Exception;
 use ReflectionClass;
 use ReflectionMethod;
-use ReflectionParameter;
 
 /**
  * 微服务服务端（支持元数据自动上报，符合JSON-RPC 2.0规范）
@@ -13,6 +12,9 @@ use ReflectionParameter;
  * 1. 自动解析服务接口元数据（方法、参数、类型）
  * 2. 注册到Nacos时携带元数据，供客户端查询
  * 3. 自动校验客户端请求参数
+ * @purpose 微服务服务端
+ * @author yanglong
+ * @time 2025年7月25日17:34:12
  */
 class Server
 {

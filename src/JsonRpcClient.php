@@ -2,14 +2,15 @@
 
 namespace Xiaosongshu\Nacos;
 
-use GuzzleHttp\Exception\GuzzleException;
-
 /**
  * 微服务客户端（支持自动服务发现、元数据查询、参数校验）
  * 核心特性：
  * 1. 开发人员仅需传入服务标识和业务参数（键值对）
  * 2. 自动从Nacos获取服务实例和接口元数据
  * 3. 自动校验参数合法性并转换为服务端所需格式
+ * @purpose 新版微服务客户端
+ * @author yanglong
+ * @time 2025年7月25日17:33:44
  */
 class JsonRpcClient
 {
@@ -250,11 +251,13 @@ class JsonRpcClient
                 throw new \Exception("创建连接失败：" . socket_strerror(socket_last_error()));
             }
 
-            // 设置超时
+            // 设置接收超时
             socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0
             ]);
+
+            // 设置发送超时
             socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, [
                 'sec' => $this->timeout,
                 'usec' => 0

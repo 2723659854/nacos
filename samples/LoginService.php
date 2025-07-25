@@ -3,7 +3,9 @@
 namespace Xiaosongshu\Nacos\Samples;
 
 /**
- * 用户登录服务
+ * @purpose 用户登录服务
+ * @author yanglong
+ * @time 2025年7月25日17:32:27
  */
 class LoginService
 {
