@@ -1,19 +1,20 @@
 <?php
-
 namespace Xiaosongshu\Nacos;
 
 use GuzzleHttp\RequestOptions;
 use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Client as HttpClient;
 
+
 class Client
 {
-    /** @var \GuzzleHttp\Client $client guzzle客户端 */
-    protected HttpClient $client;
+
+    protected  $client;
+
     /** @var string|mixed|null $token 鉴权token */
-    protected string $token;
+    protected  $token;
     /** @var string $host nacos服务器地址 */
-    protected string $host = 'http://127.0.0.1:8848';
+    protected  $host = 'http://127.0.0.1:8848';
 
     /** 分隔符 */
     public const WORD_SEPARATOR = "\x02";
@@ -28,7 +29,7 @@ class Client
      */
     public function __construct(string $host='http://127.0.0.1:8848',string $user='nacos',string $pass='nacos')
     {
-        /** @var Client $client 建议放到handle里面去 */
+
         $client       = new HttpClient([
             'base_uri' => $host,
         ]);
@@ -170,27 +171,35 @@ class Client
 
     /**
      * 注册实例
-     * @param string $serviceName
-     * @param string $ip
-     * @param string $port
-     * @param string $namespaceId
-     * @param string $metadata
-     * @param float $weight
-     * @param bool $healthy
-     * @param bool $ephemeral
+     * @param string $serviceName 服务名称（必须含分组，如DEFAULT_GROUP@@father）
+     * @param string $ip IP地址
+     * @param string $port 端口
+     * @param string $namespaceId 命名空间（默认public可传空）
+     * @param array $metadata 元数据（数组形式，内部转为JSON）
+     * @param float $weight 权重
+     * @param bool $healthy 健康状态（临时实例此参数无效，由心跳决定）
+     * @param bool $ephemeral 是否临时实例
      * @return array
      */
-    public function createInstance(string $serviceName, string $ip, string $port, string $namespaceId, string $metadata, float $weight, bool $healthy, bool $ephemeral)
-    {
+    public function createInstance(
+        string $serviceName,
+        string $ip,
+        string $port,
+        string $namespaceId,
+        array $metadata, // 改为数组，内部转为JSON（避免外部手动编码出错）
+        float $weight,
+        bool $healthy,
+        bool $ephemeral
+    ) {
         $data = [
             "serviceName" => $serviceName,
             "ip" => $ip,
             "port" => $port,
             "namespaceId" => $namespaceId,
             "weight" => $weight,
-            "healthy" => $healthy,
-            'ephemeral' => $ephemeral,
-            'metadata' => $metadata
+            "healthy" => $healthy ? "true" : "false", // 转为字符串（Nacos要求）
+            "ephemeral" => $ephemeral ? "true" : "false", // 字符串"true"/"false"
+            "metadata" => json_encode($metadata) // 内部转为JSON字符串，确保格式正确
         ];
         return $this->request('post', '/nacos/v1/ns/instance', $data);
     }
@@ -214,15 +223,15 @@ class Client
 
     /**
      * 实例详情
-     * @param string $serviceName
-     * @param string $healthyOnly
+     * @param string $serviceName 服务名称
+     * @param bool $healthyOnly 只返回健康实例
      * @param string $ip
      * @param string $port
      * @return array
      */
-    public function getInstanceDetail(string $serviceName, string $healthyOnly, string $ip, string $port)
+    public function getInstanceDetail(string $serviceName, bool $healthyOnly, string $ip, string $port)
     {
-        $data = ['serviceName' => $serviceName, 'healthyOnly' => $healthyOnly, 'ip' => $ip, 'port' => $port];
+        $data = ['serviceName' => $serviceName, 'healthyOnly' => "true", 'ip' => $ip, 'port' => $port];
         return $this->request('get', '/nacos/v1/ns/instance', $data);
     }
 
@@ -303,23 +312,43 @@ class Client
 
     /**
      * 发送心跳
-     * @param string $serviceName
-     * @param string $ip
-     * @param string $port
-     * @param string $namespaceId
-     * @param string $ephemeral
-     * @param string $beat
+     * @param string $serviceName 服务名称（必须与注册时完全一致，含分组）
+     * @param string $ip IP地址
+     * @param string $port 端口
+     * @param string $namespaceId 命名空间
+     * @param array $metaData 元数据（与注册时的数组完全一致）
+     * @param bool $ephemeral 是否临时实例（与注册时一致）
+     * @param float $weight 权重（必须与注册时一致）
      * @return array
      */
-    public function sendBeat(string $serviceName, string $ip, string $port, string $namespaceId, string $ephemeral, string $beat)
-    {
+    public function sendBeat(
+        string $serviceName,
+        string $ip,
+        string $port,
+        string $namespaceId,
+        array $metaData,
+        bool $ephemeral, // 改为bool类型（与创建实例的参数类型一致）
+        float $weight
+    ) {
+        // 构建beat参数（Nacos必须的字段，缺一不可）
+        $beatData = [
+            "serviceName" => $serviceName,
+            "ip" => $ip,
+            "port" => (int)$port, // 转为整数（与Nacos内部存储类型一致）
+            "cluster" => "DEFAULT", // 集群名称（默认DEFAULT，必须指定）
+            "weight" => $weight, // 权重必须与注册时完全一致
+            "metadata" => $metaData, // 元数据数组（与注册时的数组一致）
+            "scheduled" => false, // 固定值false（Nacos内部标识）
+            "period" => 5000 // 心跳间隔（与实例的instanceHeartBeatInterval一致）
+        ];
+
         $data = [
-            'serviceName' => $serviceName,
-            'ip' => $ip,
-            'port' => $port,
-            'ephemeral' => $ephemeral,
-            'beat' => $beat,
-            'namespaceId' => $namespaceId,
+            "serviceName" => $serviceName,
+            "ip" => $ip,
+            "port" => $port,
+            "namespaceId" => $namespaceId,
+            "ephemeral" => $ephemeral ? "true" : "false", // 字符串类型
+            "beat" => json_encode($beatData, JSON_UNESCAPED_UNICODE) // 确保JSON格式正确
         ];
         return $this->request('put', '/nacos/v1/ns/instance/beat', $data);
     }
