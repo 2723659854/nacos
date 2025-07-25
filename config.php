@@ -36,8 +36,13 @@ return [
             'enable'=>true,
             'serviceName'=>\Xiaosongshu\Nacos\Samples\DemoService::class,
             'namespace'=>'public',
-            'metadata'=>['method'=>'add','params'=>json_encode([['type'=>'string','name'=>'name'],['type'=>'int','name'=>'age']]),'description' => '示例服务'],
-            'heartbeat_interval'=>5
+        ],
+
+        // 服务标识：login（客户端只需知道这个）
+        'login' => [
+            'enable' => true,
+            'serviceName' => \Xiaosongshu\Nacos\Samples\LoginService::class, // 实际实现类
+            'namespace' => 'public'
         ]
     ]
 ];

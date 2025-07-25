@@ -3,10 +3,16 @@
 namespace Xiaosongshu\Nacos;
 
 use Exception;
+use ReflectionClass;
+use ReflectionMethod;
+use ReflectionParameter;
 
 /**
- * Nacos微服务服务端（支持服务标识解耦与JSON-RPC 2.0）
- * 核心特性：服务标识与实现分离、自动处理Nacos服务注册、安全隐藏代码结构
+ * 微服务服务端（支持元数据自动上报，符合JSON-RPC 2.0规范）
+ * 核心特性：
+ * 1. 自动解析服务接口元数据（方法、参数、类型）
+ * 2. 注册到Nacos时携带元数据，供客户端查询
+ * 3. 自动校验客户端请求参数
  */
 class Server
 {
@@ -32,7 +38,7 @@ class Server
     const ERROR_PARSE = ['code' => -32700, 'message' => '解析错误（无效JSON格式）'];
     const ERROR_INVALID_REQUEST = ['code' => -32600, 'message' => '无效请求（不符合JSON-RPC规范）'];
     const ERROR_METHOD_NOT_FOUND = ['code' => -32601, 'message' => '方法不存在'];
-    const ERROR_INVALID_PARAMS = ['code' => -32602, 'message' => '参数无效（必须是数组）'];
+    const ERROR_INVALID_PARAMS = ['code' => -32602, 'message' => '参数无效（类型或必填项错误）'];
     const ERROR_INTERNAL = ['code' => -32603, 'message' => '服务端内部错误'];
 
     /**
@@ -46,7 +52,7 @@ class Server
         $this->validateConfig();
         $this->initConfig();
         $this->initNacosClient();
-        $this->initEnabledServices();
+        $this->initEnabledServices(); // 初始化服务并解析元数据
     }
 
     /**
@@ -55,17 +61,12 @@ class Server
      */
     private function validateConfig()
     {
-        // 验证Nacos服务器配置
         if (empty($this->config['server']['host']) || empty($this->config['server']['username']) || empty($this->config['server']['password'])) {
             throw new Exception("Nacos配置不完整（host/username/password不能为空）");
         }
-
-        // 验证实例配置
         if (empty($this->config['instance']['ip']) || empty($this->config['instance']['port'])) {
             throw new Exception("实例配置不完整（ip/port不能为空）");
         }
-
-        // 验证服务配置（至少启用一个服务）
         $hasEnabledService = false;
         foreach ($this->config['service'] as $service) {
             if (!empty($service['enable'])) {
@@ -86,7 +87,7 @@ class Server
         $this->serverConfig = $this->config['server'];
         $this->instanceConfig = $this->config['instance'];
         $this->serviceConfig = $this->config['service'];
-        $this->heartbeatInterval = $this->config['server']['heartbeat_interval'] ?? 5; // 默认5秒心跳
+        $this->heartbeatInterval = $this->config['server']['heartbeat_interval'] ?? 5;
     }
 
     /**
@@ -103,45 +104,107 @@ class Server
     }
 
     /**
-     * 初始化启用的服务（服务标识与实现类映射）
+     * 初始化启用的服务（包含元数据解析）
      * @throws Exception
      */
     private function initEnabledServices()
     {
         foreach ($this->serviceConfig as $serviceKey => $service) {
-            // 跳过未启用的服务
             if (empty($service['enable'])) {
                 continue;
             }
 
             $serviceClass = $service['serviceName'];
-            // 验证服务类是否存在
             if (!class_exists($serviceClass)) {
                 throw new Exception("服务类不存在：{$serviceClass}（服务标识：{$serviceKey}）");
             }
 
-            // 生成安全的Nacos服务名（隐藏类名）
-            $nacosServiceName = $this->generateSafeNacosName($serviceKey);
-
             // 实例化服务类
             $serviceInstance = new $serviceClass();
+
+            // 解析服务元数据（方法、参数、类型等）
+            $metadata = $this->parseServiceMetadata($serviceInstance, $serviceKey);
+
+            // 生成安全的Nacos服务名
+            $nacosServiceName = $this->generateSafeNacosName($serviceKey);
+
             $this->enabledServices[$serviceKey] = [
-                'serviceKey' => $serviceKey,         // 服务标识（如demo）
-                'serviceClass' => $serviceClass,     // 实际实现类（内部使用）
-                'nacosServiceName' => $nacosServiceName, // 注册到Nacos的服务名
-                'instance' => $serviceInstance,      // 服务实例
+                'serviceKey' => $serviceKey,
+                'serviceClass' => $serviceClass,
+                'nacosServiceName' => $nacosServiceName,
+                'instance' => $serviceInstance,
                 'namespace' => $service['namespace'] ?? 'public',
-                'metadata' => $service['metadata'] ?? []
+                'metadata' => $metadata // 包含接口元数据
             ];
 
-            echo "[初始化] 已加载服务：{$serviceKey} -> {$serviceClass}\n";
+            echo "[初始化] 已加载服务：{$serviceKey} -> {$serviceClass}（元数据解析完成）\n";
         }
     }
 
     /**
-     * 生成安全的Nacos服务名（避免特殊字符，隐藏实现）
-     * @param string $serviceKey 服务标识（如demo）
-     * @return string 安全服务名（如SERVICE@@demo）
+     * 解析服务元数据（序列化为JSON字符串，避免Nacos格式错误）
+     */
+    private function parseServiceMetadata($serviceInstance, string $serviceKey): array
+    {
+        $reflection = new ReflectionClass($serviceInstance);
+        $methods = [];
+
+        // 遍历所有公共方法
+        foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
+            if ($method->getDeclaringClass()->getName() !== get_class($serviceInstance)) {
+                continue;
+            }
+
+            $methodName = $method->getName();
+            $params = [];
+            foreach ($method->getParameters() as $param) {
+                $params[] = [
+                    'name' => $param->getName(),
+                    'type' => $param->getType() ? (string)$param->getType() : 'mixed',
+                    'required' => !$param->isOptional()
+                ];
+            }
+
+            $methods[$methodName] = [
+                'params' => $params
+            ];
+        }
+
+        // 复杂元数据序列化为JSON字符串（核心修复）
+        $complexMetadata = [
+            'serviceKey' => $serviceKey,
+            'methods' => $methods
+        ];
+
+        // 返回扁平的键值对（Nacos可接受的格式）
+        return [
+            'serviceMetadata' => json_encode($complexMetadata, JSON_UNESCAPED_UNICODE),
+            'description' => "{$serviceKey}服务元数据" // 简单描述（非嵌套）
+        ];
+    }
+
+    /**
+     * 从方法注释中提取参数描述（简化实现）
+     */
+    private function getParamDescription(ReflectionMethod $method, string $paramName): string
+    {
+        $comment = $method->getDocComment() ?: '';
+        preg_match("/@param\s+\S+\s+\$$paramName\s+(.*?)\r?\n/", $comment, $matches);
+        return $matches[1] ?? "参数{$paramName}";
+    }
+
+    /**
+     * 从方法注释中提取方法描述
+     */
+    private function getMethodDescription(ReflectionMethod $method): string
+    {
+        $comment = $method->getDocComment() ?: '';
+        preg_match("/\/\*\*\s*(\S.*?)\r?\n/", $comment, $matches);
+        return $matches[1] ?? "未定义描述";
+    }
+
+    /**
+     * 生成安全的Nacos服务名
      */
     private function generateSafeNacosName(string $serviceKey): string
     {
@@ -155,18 +218,10 @@ class Server
     public function run()
     {
         try {
-            // 注册实例到Nacos
-            $this->registerToNacos();
-
-            // 启动TCP服务
+            $this->registerToNacos(); // 注册到Nacos（携带元数据）
             $this->startTcpServer();
-
-            // 注册优雅退出钩子
             register_shutdown_function([$this, 'shutdown']);
-
-            // 进入事件循环
             $this->eventLoop();
-
         } catch (Exception $e) {
             echo "[错误] 服务启动失败：{$e->getMessage()}\n";
             $this->shutdown();
@@ -175,21 +230,21 @@ class Server
     }
 
     /**
-     * 注册实例到Nacos
+     * 注册实例到Nacos（携带元数据）
      * @throws Exception
      */
     private function registerToNacos()
     {
         foreach ($this->enabledServices as $service) {
             $result = $this->nacosClient->createInstance(
-                $service['nacosServiceName'], // 使用安全服务名注册
+                $service['nacosServiceName'],
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $service['namespace'],
-                $service['metadata'],
+                $service['metadata'], // 上报元数据
                 (float)$this->instanceConfig['weight'],
-                true, // 健康状态（临时实例由心跳决定）
-                true  // 临时实例（需心跳）
+                true,
+                true
             );
 
             if (isset($result['error'])) {
@@ -209,24 +264,18 @@ class Server
         $ip = $this->instanceConfig['ip'];
         $port = $this->instanceConfig['port'];
 
-        // 创建TCP套接字
         $this->serverSocket = socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($this->serverSocket === false) {
             throw new Exception("创建TCP套接字失败：" . socket_strerror(socket_last_error()));
         }
 
-        // 设置非阻塞模式
         socket_set_nonblock($this->serverSocket);
-
-        // 允许端口复用
         socket_set_option($this->serverSocket, SOL_SOCKET, SO_REUSEADDR, 1);
 
-        // 绑定IP和端口
         if (socket_bind($this->serverSocket, '0.0.0.0', $port) === false) {
             throw new Exception("绑定端口失败（{$ip}:{$port}）：" . socket_strerror(socket_last_error($this->serverSocket)));
         }
 
-        // 开始监听
         if (socket_listen($this->serverSocket, 100) === false) {
             throw new Exception("监听端口失败（{$ip}:{$port}）：" . socket_strerror(socket_last_error($this->serverSocket)));
         }
@@ -253,7 +302,6 @@ class Server
             // 处理TCP请求
             $this->handleTcpRequests();
 
-            // 降低CPU占用
             usleep(10000);
         }
     }
@@ -275,9 +323,9 @@ class Server
             );
 
             if (isset($result['error'])) {
-                echo "[心跳] 失败（{$service['serviceKey']}）：{$result['error']}\n";
+                echo "[心跳] 失败（{$service['serviceKey']}）=>{$service['serviceClass']}：{$result['error']}\n";
             } else {
-                echo "[心跳] 成功（{$service['serviceKey']}）（" . date('H:i:s') . "）\n";
+                echo "[心跳] 成功（{$service['serviceKey']}）=>{$service['serviceClass']}（" . date('H:i:s') . "）\n";
             }
         }
     }
@@ -291,18 +339,15 @@ class Server
         $write = [];
         $except = [];
 
-        // 添加客户端套接字到监控集合
         foreach ($this->clients as $clientSocket) {
             $clientId = (int)$clientSocket;
             $read[] = $clientSocket;
-
             if (!empty($this->writeBuffers[$clientId])) {
                 $write[] = $clientSocket;
             }
             $except[] = $clientSocket;
         }
 
-        // 监控事件
         $activity = socket_select($read, $write, $except, 1);
         if ($activity === false) {
             $errorCode = socket_last_error();
@@ -359,19 +404,11 @@ class Server
         $this->clientAddresses[$clientId] = $clientAddr;
         $this->writeBuffers[$clientId] = [];
 
-        // 发送欢迎消息
-        $welcomeMsg = $this->buildJsonRpcResponse(null, null, [
-            'message' => '已连接到JSON-RPC服务',
-            'request_format' => '{"jsonrpc":"2.0","method":"服务标识.方法名","params":[参数],"id":"请求ID"}',
-            'example' => '{"jsonrpc":"2.0","method":"demo.add","params":["tom",18],"id":"1"}'
-        ]);
-        //$this->writeBuffers[$clientId][] = $welcomeMsg . "\n";
-
         echo "[TCP] 新客户端连接：{$clientAddr}（clientId：{$clientId}）\n";
     }
 
     /**
-     * 处理客户端请求（JSON-RPC解析）
+     * 处理客户端请求（包含参数校验）
      */
     private function handleClientRequest($socket)
     {
@@ -381,14 +418,11 @@ class Server
         $data = socket_read($socket, 4096);
         if ($data === false) {
             $errorCode = socket_last_error($socket);
-            if (!in_array($errorCode, [SOCKET_EAGAIN, SOCKET_EWOULDBLOCK])) {
-                //echo "[TCP] 读取错误（{$clientAddr}）：" . socket_strerror($errorCode) . "\n";
-                $errorMsg = in_array($errorCode, [SOCKET_ECONNRESET, SOCKET_ETIMEDOUT])
-                    ? "Client closed connection or timeout"
-                    : "Read error (code: {$errorCode})";
-                echo "[TCP] 读取错误（{$clientAddr}）：{$errorMsg}\n";
-                $this->closeClient($socket);
-            }
+            $errorMsg = in_array($errorCode, [SOCKET_ECONNRESET, SOCKET_ETIMEDOUT])
+                ? "Client closed connection or timeout"
+                : "Read error (code: {$errorCode})";
+            echo "[TCP] 读取错误（{$clientAddr}）：{$errorMsg}\n";
+            $this->closeClient($socket);
             return;
         }
 
@@ -432,7 +466,7 @@ class Server
     }
 
     /**
-     * 处理JSON-RPC请求（基于服务标识）
+     * 处理JSON-RPC请求（包含参数校验）
      */
     private function processJsonRpcRequest(string $jsonData): string
     {
@@ -452,12 +486,12 @@ class Server
         $method = $request['method'];
         $params = $request['params'] ?? [];
 
-        // 解析方法（格式：服务标识.方法名，如demo.add）
+        // 解析方法（格式：服务标识.方法名，如login.login）
         $methodParts = explode('.', $method, 2);
         if (count($methodParts) !== 2) {
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32600,
-                'message' => 'method格式错误（应为：服务标识.方法名，如demo.add）'
+                'message' => 'method格式错误（应为：服务标识.方法名，如login.login）'
             ]);
         }
         list($serviceKey, $methodName) = $methodParts;
@@ -480,9 +514,16 @@ class Server
             ]);
         }
 
-        // 验证参数
-        if (!is_array($params)) {
-            return $this->buildJsonRpcResponse($requestId, self::ERROR_INVALID_PARAMS);
+        // 验证参数（基于元数据）
+        $paramValidation = $this->validateParams(
+            $params,
+            $service['metadata']['methods'][$methodName]['params'] ?? []
+        );
+        if (!$paramValidation['valid']) {
+            return $this->buildJsonRpcResponse($requestId, [
+                'code' => -32602,
+                'message' => $paramValidation['message']
+            ]);
         }
 
         // 调用服务方法
@@ -495,6 +536,52 @@ class Server
                 'message' => "方法调用异常：{$e->getMessage()}"
             ]);
         }
+    }
+
+    /**
+     * 基于元数据验证参数
+     */
+    private function validateParams(array $params, array $paramRules): array
+    {
+        // 检查参数数量是否匹配（必填项+可选参数）
+        $requiredCount = count(array_filter($paramRules, function($rule) {
+            return $rule['required'];
+        }));
+        if (count($params) < $requiredCount) {
+            return [
+                'valid' => false,
+                'message' => "参数数量不足（至少需要{$requiredCount}个必填参数）"
+            ];
+        }
+
+        // 检查每个参数的类型
+        foreach ($paramRules as $index => $rule) {
+            // 跳过可选参数（未传参时不校验）
+            if (!isset($params[$index]) && !$rule['required']) {
+                continue;
+            }
+
+            $paramValue = $params[$index] ?? null;
+            $paramType = gettype($paramValue);
+            $expectedType = $rule['type'];
+
+            // 类型映射（PHP类型与声明类型的对应）
+            $typeMap = [
+                'integer' => 'int',
+                'boolean' => 'bool',
+                'double' => 'float'
+            ];
+            $actualType = $typeMap[$paramType] ?? $paramType;
+
+            if ($actualType !== $expectedType && $expectedType !== 'mixed') {
+                return [
+                    'valid' => false,
+                    'message' => "参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）"
+                ];
+            }
+        }
+
+        return ['valid' => true, 'message' => '参数验证通过'];
     }
 
     /**

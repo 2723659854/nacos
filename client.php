@@ -15,21 +15,56 @@ $nacosConfig = [
 ];
 
 
-// 实例化客户端：只需指定服务标识"demo"
-$client = new JsonRpcClient($nacosConfig, 'demo');
+$client = new JsonRpcClient($nacosConfig);
 
-// 调用add方法
-$addResult = $client->request('add', ['tom', 18]);
-if ($addResult['success']) {
-    echo "添加结果：{$addResult['result']}（调用实例：{$addResult['instance']}）\n";
+// 调用login服务（仅需传入服务标识和业务参数）
+$loginResult = $client->call('login', [
+    'username' => 'zhangsan',
+    'password' => '123456'
+]);
+
+// 打印结果
+if ($loginResult['success']) {
+    echo "登录成功：\n";
+    echo "Token：{$loginResult['result']['token']}\n";
+    echo "有效期：{$loginResult['result']['expire']}秒\n";
+    echo "调用实例：{$loginResult['instance']}\n";
 } else {
-    echo "添加失败：{$addResult['error']}\n";
+    echo "登录失败：{$loginResult['error']}\n";
 }
 
-// 调用get方法
-$getResult = $client->request('get', ['tom']);
-if ($getResult['success']) {
-    echo "查询结果：" . json_encode($getResult['result'], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE) . "\n";
+// 3. 调用DemoService的add方法（添加用户）
+$addResult = $client->call(
+    'demo', // 服务标识（对应服务端配置中的serviceKey）
+    [
+        'name' => '张三',  // 对应add方法的$name参数
+        'age' => 20        // 对应add方法的$age参数
+    ],
+    'add' // 要调用的方法名（DemoService的add方法）
+);
+
+// 处理add方法结果
+if ($addResult['success']) {
+    echo "添加用户结果：{$addResult['result']}\n";
+    echo "调用的服务实例：{$addResult['instance']}\n\n";
 } else {
-    echo "查询失败：{$getResult['error']}\n";
+    echo "添加用户失败：{$addResult['error']}\n\n";
+}
+
+// 4. 调用DemoService的get方法（查询用户）
+$getResult = $client->call(
+    'demo', // 服务标识（不变）
+    [
+        'name' => '张三'  // 对应get方法的$name参数
+    ],
+    'get' // 要调用的方法名（DemoService的get方法）
+);
+
+// 处理get方法结果
+if ($getResult['success']) {
+    echo "查询用户结果：\n";
+    print_r($getResult['result']); // 打印数组结果
+    echo "调用的服务实例：{$getResult['instance']}\n";
+} else {
+    echo "查询用户失败：{$getResult['error']}\n";
 }
