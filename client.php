@@ -1,9 +1,9 @@
 <?php
 
 // 使用示例
-require_once __DIR__.'/vendor/autoload.php';
-require_once __DIR__."/src/Client.php";
-require_once __DIR__."/src/JsonRpcClient.php";
+require_once __DIR__ . '/vendor/autoload.php';
+require_once __DIR__ . "/src/Client.php";
+require_once __DIR__ . "/src/JsonRpcClient.php";
 
 use Xiaosongshu\Nacos\JsonRpcClient;
 
@@ -32,6 +32,18 @@ if ($loginResult['success']) {
 } else {
     echo "登录失败：{$loginResult['error']}\n";
 }
+
+
+// 退出登录 使用契约
+$logoutRes = $client->call('login', ['token' => $loginResult['result']['token']], 'out');
+if ($logoutRes['success']) {
+    echo "退出登录成功：\n";
+    echo "Token：{$logoutRes['result']['token']}\n";
+    echo "调用实例：{$logoutRes['instance']}\n";
+} else {
+    echo "退出登录失败：{$logoutRes['error']}\n";
+}
+
 
 // 3. 调用DemoService的add方法（添加用户）
 $addResult = $client->call(

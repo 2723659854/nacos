@@ -34,4 +34,17 @@ class LoginService
             'expire' => 3600 // token有效期（秒）
         ];
     }
+
+    /**
+     * 退出登录
+     * @param string $token
+     * @return array
+     */
+    public function logout(string $token): array{
+        return [
+            'success' => true,
+            'message' => '退出登录成功',
+            'token' => $token,
+        ];
+    }
 }

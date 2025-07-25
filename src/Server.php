@@ -172,10 +172,13 @@ class Server
             ];
         }
 
-        // 复杂元数据序列化为JSON字符串（核心修复）
+        // 当前服务的契约 就是功能和方法的映射关系
+        $contract = $this->serviceConfig[$serviceKey]['contract'] ?? [];
+        // 复杂元数据序列化为JSON字符串
         $complexMetadata = [
             'serviceKey' => $serviceKey,
-            'methods' => $methods
+            'methods' => $methods,
+            'contract' => $contract
         ];
 
         // 返回扁平的键值对（Nacos可接受的格式）
@@ -496,7 +499,8 @@ class Server
                 'message' => 'method格式错误（应为：服务标识.方法名，如login.login）'
             ]);
         }
-        list($serviceKey, $methodName) = $methodParts;
+        // 解析用户请求的服务和方法
+        list($serviceKey,  $funcName) = $methodParts;
 
         // 验证服务标识是否存在
         if (!isset($this->enabledServices[$serviceKey])) {
@@ -505,7 +509,20 @@ class Server
                 'message' => "服务不存在（标识：{$serviceKey}），可用服务：" . implode(',', array_keys($this->enabledServices))
             ]);
         }
+        // 获取服务类
         $service = $this->enabledServices[$serviceKey];
+        // 获取服务的元数据
+        $serviceMetadata = $service["metadata"]['serviceMetadata']??"";
+        if ($serviceMetadata) {
+            $serviceMetadata = json_decode($serviceMetadata, true);
+            // 获取契约
+            $contract = $serviceMetadata['contract'] ?? [];
+        }else{
+            $contract = [];
+        }
+
+        // 如果定义了契约，则调用契约，否则调用原来的方法
+        $methodName = $contract[$funcName] ?? $funcName;
 
         // 验证方法是否存在
         $serviceInstance = $service['instance'];

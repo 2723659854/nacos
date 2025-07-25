@@ -32,17 +32,23 @@ return [
 
     /** 需要注册的服务 */
     'service'=>[
+
+        // 服务标识：demo
         'demo'=>[
             'enable'=>true,
             'serviceName'=>\Xiaosongshu\Nacos\Samples\DemoService::class,
             'namespace'=>'public',
         ],
 
-        // 服务标识：login（客户端只需知道这个）
+        // 服务标识：login
         'login' => [
             'enable' => true,
             'serviceName' => \Xiaosongshu\Nacos\Samples\LoginService::class, // 实际实现类
-            'namespace' => 'public'
+            'namespace' => 'public',
+            # 契约 也就是功能映射，客户端只关心调用login功能，不关心具体是执行哪个方法
+            'contract' => [
+                'out' => 'logout'
+            ]
         ]
     ]
 ];

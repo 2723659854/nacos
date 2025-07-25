@@ -71,15 +71,25 @@ class JsonRpcClient
             list($instance, $metadata) = $this->getInstanceAndMetadata($serviceKey);
 
             // 2. 验证方法是否存在
-            if (!isset($metadata['methods'][$method])) {
-                return [
-                    'success' => false,
-                    'error' => "服务{$serviceKey}不存在方法{$method}，可用方法：" . implode(',', array_keys($metadata['methods']))
-                ];
+            if (!isset($metadata['methods'][$method]) ) {
+                // 还有契约处理
+                if (!isset($metadata['contract'][$method])){
+                    return [
+                        'success' => false,
+                        'error' => "服务{$serviceKey}不存在方法{$method}，可用方法：" . implode(',', array_keys($metadata['methods']))
+                    ];
+                }
+            }
+            // 也可能服务提供者定义了契约
+            $contractMethod = $metadata['contract'][$method]??"";
+            if ($contractMethod){
+                // 3. 校验业务参数是否符合元数据规则 使用元数据中定义契约定义方法的参数规则
+                $paramRules = $metadata['methods'][$contractMethod]['params'];
+            }else{
+                // 3. 校验业务参数是否符合元数据规则
+                $paramRules = $metadata['methods'][$method]['params'];
             }
 
-            // 3. 校验业务参数是否符合元数据规则
-            $paramRules = $metadata['methods'][$method]['params'];
             $validateResult = $this->validateParams($businessParams, $paramRules);
             if (!$validateResult['valid']) {
                 return [
