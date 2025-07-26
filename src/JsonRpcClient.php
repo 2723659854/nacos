@@ -314,14 +314,14 @@ class JsonRpcClient
         $socket = null;
         try {
             // 创建套接字
-            $socket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+            $socket = \socket_create(\AF_INET, \SOCK_STREAM, \SOL_TCP);
             if ($socket === false) {
                 throw new \Exception("创建连接失败：" . \socket_strerror(\socket_last_error()));
             }
 
             // 设置超时
-            \socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
-            \socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
+            \socket_set_option($socket, \SOL_SOCKET, \SO_RCVTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
+            \socket_set_option($socket, \SOL_SOCKET, \SO_SNDTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
 
             // 连接实例
             $connectResult = \socket_connect($socket, $instance['ip'], $instance['port']);

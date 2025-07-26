@@ -208,21 +208,43 @@ class Client
         return $this->request('post', '/nacos/v1/ns/instance', $data);
     }
 
+
     /**
      * 获取实例列表
-     * @param string $serviceName
-     * @param string|null $namespaceId
-     * @param bool $healthyOnly
+     * @param string $serviceName 服务名（格式：groupName@@serviceName 或 仅serviceName）
+     * @param string|null $namespaceId 命名空间ID
+     * @param bool $healthyOnly 是否只返回健康实例
+     * @param string|null $clusters 集群名称（多个集群用逗号分隔）
      * @return array
      */
-    public function getInstanceList(string $serviceName, string $namespaceId = null,bool $healthyOnly=false)
-    {
-        $data = ['serviceName' => $serviceName,'healthyOnly'=>$healthyOnly];
+    public function getInstanceList(
+        string $serviceName,
+        string $namespaceId = null,
+        bool $healthyOnly = false,
+        string $clusters = null
+    ) {
+        // 解析服务名中的分组信息
+        $groupName = 'DEFAULT_GROUP';
+        if (strpos($serviceName, '@@') !== false) {
+            list($groupName, $serviceName) = explode('@@', $serviceName, 2);
+        }
+
+        $data = [
+            'serviceName' => $serviceName,
+            'groupName' => $groupName,
+            'healthyOnly' => $healthyOnly ? 'true' : 'false',
+        ];
+
         if ($namespaceId) {
             $data['namespaceId'] = $namespaceId;
         }
-        return $this->request('get', '/nacos/v1/ns/instance/list', $data);
 
+        if ($clusters) {
+            $data['clusters'] = $clusters;
+        }
+
+        // 使用GET请求并确保参数作为URL参数传递
+        return $this->request('get', '/nacos/v1/ns/instance/list', $data, true);
     }
 
     /**
@@ -235,13 +257,11 @@ class Client
      */
     public function getInstanceDetail(string $serviceName, bool $healthyOnly, string $ip, string $port)
     {
-        $data = ['serviceName' => $serviceName, 'healthyOnly' => "true", 'ip' => $ip, 'port' => $port];
+        $data = ['serviceName' => $serviceName, 'healthyOnly' => $healthyOnly?"true":"false", 'ip' => $ip, 'port' => $port];
         return $this->request('get', '/nacos/v1/ns/instance', $data);
     }
 
 
-
-    // 在 Client 类中修改 updateInstanceHealthy 方法
     /**
      * 更新实例健康状态（Nacos v1 版本）
      * @param string $serviceName
@@ -333,6 +353,7 @@ class Client
      * @param array $metaData 元数据（与注册时的数组完全一致）
      * @param bool $ephemeral 是否临时实例（与注册时一致）
      * @param float $weight 权重（必须与注册时一致）
+     * @param int $heartbeatInterval 心跳间隔（秒）
      * @return array
      */
     public function sendBeat(
@@ -342,7 +363,8 @@ class Client
         string $namespaceId,
         array $metaData,
         bool $ephemeral, // 改为bool类型（与创建实例的参数类型一致）
-        float $weight
+        float $weight,
+        int $heartbeatInterval = 5
     ) {
         // 构建beat参数（Nacos必须的字段，缺一不可）
         $beatData = [
@@ -353,7 +375,7 @@ class Client
             "weight" => $weight, // 权重必须与注册时完全一致
             "metadata" => $metaData, // 元数据数组（与注册时的数组一致）
             "scheduled" => false, // 固定值false（Nacos内部标识）
-            "period" => 5000 // 心跳间隔（与实例的instanceHeartBeatInterval一致）
+            "period" => $heartbeatInterval*1000 // 心跳间隔（与实例的instanceHeartBeatInterval一致）
         ];
 
         $data = [

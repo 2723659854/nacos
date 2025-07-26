@@ -45,7 +45,7 @@ if ($logoutRes['success']) {
 }
 
 /** 测试请求超时，是否会触发服务降级 */
-for ($i=0;$i<=100;$i++) {
+for ($i=0;$i<=10;$i++) {
 // 3. 调用DemoService的add方法（添加用户）
     $addResult = $client->call(
         'demo', // 服务标识（对应服务端配置中的serviceKey）
@@ -85,3 +85,5 @@ if ($getResult['success']) {
 } else {
     echo "查询用户失败：{$getResult['error']}\n";
 }
+
+echo "所有请求处理完毕\r\n";

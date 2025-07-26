@@ -11,7 +11,7 @@ use ReflectionMethod;
  * 核心特性：
  * 1. 自动解析服务接口元数据
  * 2. 基于超时率的服务降级（动态调整权重）
- * 3. 基于错误率的服务熔断（标记健康状态）
+ * 3. 基于错误率的服务熔断（通过控制心跳实现）
  * 4. 每个服务独立统计与调整逻辑
  * @purpose 微服务服务端
  * @author yanglong
@@ -52,6 +52,9 @@ class Server
     private $clients = [];       // 客户端连接（clientId => socket）
     private $writeBuffers = [];  // 写缓冲区（clientId => 待发送数据）
     private $clientAddresses = []; // 客户端地址（clientId => IP:Port）
+
+    /** 心跳控制开关（按服务标识分组，true=发送心跳，false=停止心跳） */
+    private $sendHeartbeat = [];
 
     /** JSON-RPC常量（遵循2.0规范） */
     const JSON_RPC_VERSION = "2.0";
@@ -166,10 +169,13 @@ class Server
             $this->requestStats[$serviceKey] = [
                 'window' => [],
                 'currentWeight' => (float)$this->instanceConfig['weight'],
-                'currentHealthy' => true,
+                'currentHealthy' => true, // 记录本地健康状态（用于判断是否需要恢复心跳）
                 'lastWeightAdjust' => 0,
                 'lastHealthAdjust' => 0
             ];
+
+            // 初始化心跳开关（默认发送心跳）
+            $this->sendHeartbeat[$serviceKey] = true;
 
             echo "[初始化] 已加载服务：{$serviceKey} -> {$serviceClass}（元数据解析完成）\n";
         }
@@ -254,8 +260,8 @@ class Server
                 $service['namespace'],
                 $service['metadata'],
                 (float)$this->instanceConfig['weight'],
-                true,
-                true
+                true,  // 健康状态（初始为健康）
+                true   // 临时实例（关键：通过心跳控制健康状态）
             );
 
             if (isset($result['error'])) {
@@ -275,13 +281,13 @@ class Server
         $ip = $this->instanceConfig['ip'];
         $port = $this->instanceConfig['port'];
 
-        $this->serverSocket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
+        $this->serverSocket = \socket_create(\AF_INET, \SOCK_STREAM, \SOL_TCP);
         if ($this->serverSocket === false) {
             throw new Exception("创建TCP套接字失败：" . \socket_strerror(\socket_last_error()));
         }
 
         \socket_set_nonblock($this->serverSocket);
-        \socket_set_option($this->serverSocket, SOL_SOCKET, SO_REUSEADDR, 1);
+        \socket_set_option($this->serverSocket, \SOL_SOCKET, \SO_REUSEADDR, 1);
 
         if (\socket_bind($this->serverSocket, '0.0.0.0', $port) === false) {
             throw new Exception("绑定端口失败（{$ip}:{$port}）：" . \socket_strerror(\socket_last_error($this->serverSocket)));
@@ -306,7 +312,7 @@ class Server
         while (true) {
             $now = time();
 
-            // 定时发送心跳
+            // 定时发送心跳（受心跳开关控制）
             if ($now - $lastHeartbeatTime >= $this->heartbeatInterval) {
                 $this->sendNacosHeartbeat();
                 $lastHeartbeatTime = $now;
@@ -328,25 +334,32 @@ class Server
     }
 
     /**
-     * 发送Nacos心跳
+     * 发送Nacos心跳（仅发送启用了心跳的服务）
      */
     private function sendNacosHeartbeat()
     {
-        foreach ($this->enabledServices as $service) {
+        foreach ($this->enabledServices as $serviceKey => $service) {
+            // 跳过关闭心跳的服务（熔断中）
+            if (!$this->sendHeartbeat[$serviceKey]) {
+                echo "[心跳] 已停止（{$serviceKey}）（" . date('H:i:s') . "）\n";
+                continue;
+            }
+
             $result = $this->nacosClient->sendBeat(
                 $service['nacosServiceName'],
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $service['namespace'],
                 $service['metadata'],
-                true,
-                $this->requestStats[$service['serviceKey']]['currentWeight'] // 使用当前权重发送心跳
+                true,  // 临时实例
+                $this->requestStats[$serviceKey]['currentWeight'], // 使用当前权重
+                $this->heartbeatInterval
             );
 
             if (isset($result['error'])) {
-                echo "[心跳] 失败（{$service['serviceKey']}）：{$result['error']}\n";
+                echo "[心跳] 失败（{$serviceKey}）：{$result['error']}\n";
             } else {
-                echo "[心跳] 成功（{$service['serviceKey']}）（" . date('H:i:s') . "）\n";
+                echo "[心跳] 成功（{$serviceKey}）（" . date('H:i:s') . "）\n";
             }
         }
     }
@@ -708,62 +721,44 @@ class Server
         $errorRate = $errorCount / $totalRequests;
         $now = time();
 
-        // 处理错误率（熔断）
+        // 处理错误率（熔断：控制心跳）
         $this->handleErrorRate($serviceKey, $errorRate, $now);
 
-        // 处理超时率（降级）
+        // 处理超时率（降级：调整权重）
         $this->handleTimeoutRate($serviceKey, $timeoutRate, $now);
     }
 
     /**
-     * 处理错误率（熔断逻辑）
+     * 处理错误率（熔断逻辑：通过控制心跳实现）
+     * 临时实例不允许手动修改健康状态，通过停止/恢复心跳让Nacos自动标记健康状态
      */
     private function handleErrorRate(string $serviceKey, float $errorRate, int $now)
     {
         $service = $this->enabledServices[$serviceKey];
         $stats = $this->requestStats[$serviceKey];
         $coolDownPassed = ($now - $stats['lastHealthAdjust']) > $this->adjustCoolDown;
-        $metadata = $service['metadata']; // 获取服务元数据
 
-        // 错误率≥50% 且 冷却时间已过 且 当前健康
+        // 错误率≥50% 且 冷却时间已过 且 当前健康（需要熔断）
         if ($errorRate >= 0.5 && $coolDownPassed && $stats['currentHealthy']) {
-            $result = $this->nacosClient->updateInstanceHealthy(
-                $service['nacosServiceName'],
-                $service['namespace'],
-                $this->instanceConfig['ip'],
-                $this->instanceConfig['port'],
-                false,
-                false, // 不清除元数据
-                $metadata // 显式传递元数据
-            );
-            if (isset($result['error'])) {
-                echo "[{$serviceKey}服务] 熔断失败（错误率{$errorRate}）：{$result['error']}\n";
-            } else {
-                echo "[{$serviceKey}服务] 触发熔断（错误率{$errorRate}），标记为不健康\n";
-                $this->requestStats[$serviceKey]['currentHealthy'] = false;
-                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
-            }
+            // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
+            $this->sendHeartbeat[$serviceKey] = false;
+            echo "[{$serviceKey}服务] 触发熔断（错误率{$errorRate}），已停止发送心跳\n";
+
+            // 更新本地状态
+            $this->requestStats[$serviceKey]['currentHealthy'] = false;
+            $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
             return;
         }
 
-        // 错误率<50% 且 冷却时间已过 且 当前不健康（恢复）
+        // 错误率<50% 且 冷却时间已过 且 当前不健康（需要恢复）
         if ($errorRate < 0.5 && $coolDownPassed && !$stats['currentHealthy']) {
-            $result = $this->nacosClient->updateInstanceHealthy(
-                $service['nacosServiceName'],
-                $service['namespace'],
-                $this->instanceConfig['ip'],
-                $this->instanceConfig['port'],
-                true,
-                false, // 不清除元数据
-                $metadata // 显式传递元数据
-            );
-            if (isset($result['error'])) {
-                echo "[{$serviceKey}服务] 恢复健康失败（错误率{$errorRate}）：{$result['error']}\n";
-            } else {
-                echo "[{$serviceKey}服务] 恢复健康（错误率{$errorRate}），标记为健康\n";
-                $this->requestStats[$serviceKey]['currentHealthy'] = true;
-                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
-            }
+            // 恢复发送心跳（Nacos会在收到心跳后标记实例为健康）
+            $this->sendHeartbeat[$serviceKey] = true;
+            echo "[{$serviceKey}服务] 恢复健康（错误率{$errorRate}），已恢复发送心跳\n";
+
+            // 更新本地状态
+            $this->requestStats[$serviceKey]['currentHealthy'] = true;
+            $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
         }
     }
 
@@ -778,7 +773,7 @@ class Server
         $coolDownPassed = ($now - $stats['lastWeightAdjust']) > $this->adjustCoolDown;
         $currentWeight = $stats['currentWeight'];
         $metadata = $service['metadata'];
-        $ephemeral = true; // 统一使用临时实例（与注册时保持一致）
+        $ephemeral = true; // 统一使用临时实例
 
         // 降级逻辑：超时率≥50% 且 冷却时间已过 且 权重未到最低
         if ($timeoutRate >= 0.5 && $coolDownPassed) {
@@ -792,7 +787,7 @@ class Server
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $newWeight,
-                $ephemeral, // 使用统一的ephemeral设置
+                $ephemeral,
                 $metadata
             );
             if (isset($result['error'])) {
@@ -805,7 +800,7 @@ class Server
             return;
         }
 
-        // 恢复逻辑
+        // 恢复逻辑：超时率下降时逐步恢复
         if ($coolDownPassed && $currentWeight < $originalWeight) {
             $recoveryFactor = 1 + (0.5 - $timeoutRate) * 2;
             $newWeight = min($originalWeight, $currentWeight * $recoveryFactor);
@@ -819,7 +814,7 @@ class Server
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $newWeight,
-                $ephemeral, // 使用统一的ephemeral设置
+                $ephemeral,
                 $metadata
             );
             if (isset($result['error'])) {
