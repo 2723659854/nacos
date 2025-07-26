@@ -3,11 +3,12 @@
 namespace Xiaosongshu\Nacos;
 
 /**
- * 微服务客户端（支持自动服务发现、元数据查询、参数校验）
+ * 微服务客户端（支持自动服务发现、元数据查询、参数校验、负载均衡）
  * 核心特性：
  * 1. 开发人员仅需传入服务标识和业务参数（键值对）
  * 2. 自动从Nacos获取服务实例和接口元数据
  * 3. 自动校验参数合法性并转换为服务端所需格式
+ * 4. 基于访问次数和权重的负载均衡策略
  * @purpose 新版微服务客户端
  * @author yanglong
  * @time 2025年7月25日17:33:44
@@ -36,6 +37,13 @@ class JsonRpcClient
     private $lastCacheTime = [];
 
     /**
+     * 实例访问计数器（按服务标识分组，键为ip:port，值为访问次数）
+     * 结构：['serviceKey' => ['192.168.1.1:8080' => 10, '192.168.1.2:8080' => 5, ...]]
+     */
+    private $instanceAccessCount = [];
+
+
+    /**
      * 构造函数：初始化Nacos连接
      * @param array $nacosConfig Nacos配置：host, username, password
      * @param string $namespace 命名空间，默认public
@@ -52,44 +60,42 @@ class JsonRpcClient
 
         $this->namespace = $namespace;
         $this->timeout = $timeout;
+        $this->instanceAccessCount = []; // 初始化访问计数器
     }
 
+
     /**
-     * 核心方法：极简调用入口
+     * 核心方法：极简调用入口（优化负载均衡）
      * @param string $serviceKey 服务标识（如login）
-     * @param array $businessParams 业务参数（键值对，如['username' => 'xxx', 'password' => 'xxx']）
-     * @param string $method 方法名（默认与服务标识同名，如login服务默认调用login方法）
+     * @param array $businessParams 业务参数（键值对）
+     * @param string $method 方法名（默认与服务标识同名）
      * @return array 调用结果：['success' => bool, 'result' => ..., 'error' => ...]
      */
     public function call(string $serviceKey, array $businessParams, string $method = ''): array
     {
         try {
-            // 默认方法名与服务标识相同（如login服务默认调用login方法）
+            // 默认方法名与服务标识相同
             $method = $method ?: $serviceKey;
 
             // 1. 获取服务实例和元数据（自动刷新缓存）
             list($instance, $metadata) = $this->getInstanceAndMetadata($serviceKey);
+            $instanceKey = "{$instance['ip']}:{$instance['port']}"; // 实例唯一标识
 
-            // 2. 验证方法是否存在
-            if (!isset($metadata['methods'][$method]) ) {
-                // 还有契约处理
-                if (!isset($metadata['contract'][$method])){
-                    return [
-                        'success' => false,
-                        'error' => "服务{$serviceKey}不存在方法{$method}，可用方法：" . implode(',', array_keys($metadata['methods']))
-                    ];
-                }
-            }
-            // 也可能服务提供者定义了契约
-            $contractMethod = $metadata['contract'][$method]??"";
-            if ($contractMethod){
-                // 3. 校验业务参数是否符合元数据规则 使用元数据中定义契约定义方法的参数规则
-                $paramRules = $metadata['methods'][$contractMethod]['params'];
-            }else{
-                // 3. 校验业务参数是否符合元数据规则
-                $paramRules = $metadata['methods'][$method]['params'];
+            // 2. 验证方法是否存在（含契约处理）
+            if (!isset($metadata['methods'][$method]) && !isset($metadata['contract'][$method])) {
+                return [
+                    'success' => false,
+                    'error' => "服务{$serviceKey}不存在方法{$method}，可用方法：" . implode(',', array_keys($metadata['methods']))
+                ];
             }
 
+            // 3. 处理契约方法的参数规则
+            $contractMethod = $metadata['contract'][$method] ?? '';
+            $paramRules = $contractMethod
+                ? $metadata['methods'][$contractMethod]['params']
+                : $metadata['methods'][$method]['params'];
+
+            // 4. 校验业务参数
             $validateResult = $this->validateParams($businessParams, $paramRules);
             if (!$validateResult['valid']) {
                 return [
@@ -98,11 +104,16 @@ class JsonRpcClient
                 ];
             }
 
-            // 4. 转换参数为服务端所需的顺序（服务端按位置接收参数）
+            // 5. 转换参数为服务端所需的顺序
             $orderedParams = $this->convertParamsToOrdered($businessParams, $paramRules);
 
-            // 5. 发起JSON-RPC调用
-            return $this->request($serviceKey, $method, $orderedParams, $instance);
+            // 6. 发起JSON-RPC调用（调用后更新访问计数）
+            $result = $this->request($serviceKey, $method, $orderedParams, $instance);
+
+            // 7. 成功调用后更新实例访问次数
+            $this->instanceAccessCount[$serviceKey][$instanceKey] = ($this->instanceAccessCount[$serviceKey][$instanceKey] ?? 0) + 1;
+
+            return $result;
 
         } catch (\Exception $e) {
             return [
@@ -112,15 +123,16 @@ class JsonRpcClient
         }
     }
 
+
     /**
-     * 从实例中提取并反序列化元数据
+     * 获取实例和元数据（核心优化：负载均衡选择实例）
      */
     private function getInstanceAndMetadata(string $serviceKey): array
     {
         $now = time();
         $nacosServiceName = $this->generateSafeNacosName($serviceKey);
 
-        // 缓存过期则刷新
+        // 缓存过期则刷新（同步更新访问计数器）
         if (!isset($this->lastCacheTime[$serviceKey]) || $now - $this->lastCacheTime[$serviceKey] > $this->cacheExpire) {
             $this->refreshInstances($serviceKey, $nacosServiceName);
             $this->lastCacheTime[$serviceKey] = $now;
@@ -130,9 +142,10 @@ class JsonRpcClient
             throw new \Exception("未找到{$serviceKey}服务的可用实例");
         }
 
-        $instance = $this->instances[$serviceKey][array_rand($this->instances[$serviceKey])];
+        // 优化：基于访问次数和权重选择实例（负载均衡核心）
+        $instance = $this->selectInstanceByLoadBalance($serviceKey);
 
-        // 反序列化服务端上报的JSON元数据（核心修复）
+        // 反序列化服务端元数据
         $metadataStr = $instance['metadata']['serviceMetadata'] ?? '';
         if (empty($metadataStr)) {
             throw new \Exception("服务{$serviceKey}未提供元数据");
@@ -145,15 +158,44 @@ class JsonRpcClient
         return [$instance, $metadata];
     }
 
+
     /**
-     * 从Nacos刷新服务实例和元数据
+     * 负载均衡选择实例：优先选择访问次数少、权重高的实例
+     * 算法：计算每个实例的"负载分数" = 访问次数 / 权重，分数越低越优先
+     */
+    private function selectInstanceByLoadBalance(string $serviceKey): array
+    {
+        $instances = $this->instances[$serviceKey];
+        $instanceScores = []; // 存储每个实例的负载分数
+
+        foreach ($instances as $index => $instance) {
+            $instanceKey = "{$instance['ip']}:{$instance['port']}";
+            $accessCount = $this->instanceAccessCount[$serviceKey][$instanceKey] ?? 0; // 访问次数
+            $weight = $instance['weight'] ?? 1.0; // 实例权重（Nacos配置）
+            $weight = max(0.1, $weight); // 避免权重为0导致除数为0
+
+            // 计算负载分数：访问次数越多、权重越低，分数越高（越不优先）
+            $score = $accessCount / $weight;
+            $instanceScores[$index] = $score;
+        }
+
+        // 选择分数最低的实例（负载最低）
+        asort($instanceScores); // 升序排序（分数低的在前）
+        $selectedIndex = key($instanceScores); // 取第一个（分数最低）
+
+        return $instances[$selectedIndex];
+    }
+
+
+    /**
+     * 从Nacos刷新服务实例（同步更新访问计数器）
      */
     private function refreshInstances(string $serviceKey, string $nacosServiceName)
     {
         $response = $this->nacosClient->getInstanceList(
             $nacosServiceName,
             $this->namespace,
-            true
+            true // 只获取健康实例
         );
 
         if (isset($response['error'])) {
@@ -161,10 +203,32 @@ class JsonRpcClient
         }
 
         $content = json_decode($response['content'], true);
-        $hosts = $content['hosts'] ?? [];
+        $newInstances = $content['hosts'] ?? [];
+        $newInstanceKeys = []; // 新实例的ip:port集合
 
-        // 过滤健康实例
-        $this->instances[$serviceKey] = array_filter($hosts, function($host) {
+        // 提取新实例的唯一标识
+        foreach ($newInstances as $instance) {
+            $newInstanceKeys[] = "{$instance['ip']}:{$instance['port']}";
+        }
+
+        // 保留原有实例的访问计数，移除已下线实例的计数
+        if (isset($this->instanceAccessCount[$serviceKey])) {
+            foreach ($this->instanceAccessCount[$serviceKey] as $key => $_) {
+                if (!in_array($key, $newInstanceKeys)) {
+                    unset($this->instanceAccessCount[$serviceKey][$key]); // 移除下线实例计数
+                }
+            }
+        }
+
+        // 初始化新实例的访问计数（默认为0）
+        foreach ($newInstanceKeys as $key) {
+            if (!isset($this->instanceAccessCount[$serviceKey][$key])) {
+                $this->instanceAccessCount[$serviceKey][$key] = 0;
+            }
+        }
+
+        // 更新实例列表（只保留健康实例）
+        $this->instances[$serviceKey] = array_filter($newInstances, function($host) {
             return $host['healthy'] ?? false;
         });
 
@@ -175,6 +239,7 @@ class JsonRpcClient
         }
     }
 
+
     /**
      * 生成安全的Nacos服务名（与服务端保持一致）
      */
@@ -183,6 +248,7 @@ class JsonRpcClient
         $safeKey = preg_replace('/[^a-zA-Z0-9_\-]/', '', $serviceKey);
         return "SERVICE@@{$safeKey}";
     }
+
 
     /**
      * 校验业务参数是否符合元数据规则
@@ -194,14 +260,13 @@ class JsonRpcClient
             if ($rule['required'] && !isset($businessParams[$rule['name']])) {
                 return [
                     'valid' => false,
-                    'message' => "缺少必填参数：{$rule['name']}（{$rule['description']}）"
+                    'message' => "缺少必填参数：{$rule['name']}"
                 ];
             }
         }
 
         // 检查参数类型
         foreach ($businessParams as $paramName => $paramValue) {
-            // 找到参数规则
             $rule = null;
             foreach ($paramRules as $r) {
                 if ($r['name'] === $paramName) {
@@ -209,19 +274,11 @@ class JsonRpcClient
                     break;
                 }
             }
-            if (!$rule) {
-                continue; // 忽略未定义的参数
-            }
+            if (!$rule) continue;
 
             $paramType = gettype($paramValue);
             $expectedType = $rule['type'];
-
-            // 类型映射（PHP类型与声明类型的对应）
-            $typeMap = [
-                'integer' => 'int',
-                'boolean' => 'bool',
-                'double' => 'float'
-            ];
+            $typeMap = ['integer' => 'int', 'boolean' => 'bool', 'double' => 'float'];
             $actualType = $typeMap[$paramType] ?? $paramType;
 
             if ($actualType !== $expectedType && $expectedType !== 'mixed') {
@@ -235,18 +292,19 @@ class JsonRpcClient
         return ['valid' => true];
     }
 
+
     /**
-     * 将键值对参数转换为服务端所需的顺序数组（按元数据中的参数顺序）
+     * 将键值对参数转换为服务端所需的顺序数组
      */
     private function convertParamsToOrdered(array $businessParams, array $paramRules): array
     {
         $orderedParams = [];
         foreach ($paramRules as $rule) {
-            // 可选参数未传时用null填充
             $orderedParams[] = $businessParams[$rule['name']] ?? null;
         }
         return $orderedParams;
     }
+
 
     /**
      * 发起JSON-RPC请求
@@ -261,17 +319,9 @@ class JsonRpcClient
                 throw new \Exception("创建连接失败：" . \socket_strerror(\socket_last_error()));
             }
 
-            // 设置接收超时
-            \socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, [
-                'sec' => $this->timeout,
-                'usec' => 0
-            ]);
-
-            // 设置发送超时
-            \socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, [
-                'sec' => $this->timeout,
-                'usec' => 0
-            ]);
+            // 设置超时
+            \socket_set_option($socket, SOL_SOCKET, SO_RCVTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
+            \socket_set_option($socket, SOL_SOCKET, SO_SNDTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
 
             // 连接实例
             $connectResult = \socket_connect($socket, $instance['ip'], $instance['port']);
@@ -283,19 +333,18 @@ class JsonRpcClient
             $requestId = uniqid('rpc_');
             $request = [
                 'jsonrpc' => '2.0',
-                'method' => "{$serviceKey}.{$method}", // 格式：服务标识.方法名
+                'method' => "{$serviceKey}.{$method}",
                 'params' => $params,
                 'id' => $requestId
             ];
             $requestJson = json_encode($request, JSON_UNESCAPED_UNICODE) . "\n";
 
             // 发送请求
-            $sendResult = \socket_write($socket, $requestJson);
-            if ($sendResult === false) {
+            if (\socket_write($socket, $requestJson) === false) {
                 throw new \Exception("发送请求失败：" . \socket_strerror(\socket_last_error($socket)));
             }
 
-            // 接收响应（循环读取直到完整）
+            // 接收响应
             $responseJson = '';
             $timeout = time() + $this->timeout;
             while (time() < $timeout) {
@@ -305,9 +354,7 @@ class JsonRpcClient
                     continue;
                 }
                 $responseJson .= $buffer;
-                if (strpos($responseJson, "\n") !== false) {
-                    break;
-                }
+                if (strpos($responseJson, "\n") !== false) break;
             }
             $responseJson = trim($responseJson);
 
@@ -321,7 +368,6 @@ class JsonRpcClient
                 throw new \Exception("响应格式错误：{$responseJson}");
             }
 
-            // 校验响应ID与请求ID一致
             if ($response['id'] !== $requestId) {
                 throw new \Exception("响应ID不匹配（请求ID：{$requestId}，响应ID：{$response['id']}）");
             }
@@ -342,14 +388,13 @@ class JsonRpcClient
             }
 
         } finally {
-            if ($socket) {
-                \socket_close($socket);
-            }
+            if ($socket) \socket_close($socket);
         }
     }
 
+
     /**
-     * 强制刷新缓存
+     * 强制刷新缓存（同步更新访问计数器）
      */
     public function refreshCache(string $serviceKey = '')
     {
@@ -362,6 +407,19 @@ class JsonRpcClient
             foreach (array_keys($this->instances) as $key) {
                 $this->refreshCache($key);
             }
+        }
+    }
+
+
+    /**
+     * 重置实例访问计数（用于手动平衡负载）
+     */
+    public function resetAccessCount(string $serviceKey = '')
+    {
+        if ($serviceKey) {
+            $this->instanceAccessCount[$serviceKey] = [];
+        } else {
+            $this->instanceAccessCount = [];
         }
     }
 }
