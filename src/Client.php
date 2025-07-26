@@ -239,23 +239,33 @@ class Client
         return $this->request('get', '/nacos/v1/ns/instance', $data);
     }
 
+
+
+    // 在 Client 类中修改 updateInstanceHealthy 方法
     /**
-     * 更新实例健康状态
+     * 更新实例健康状态（Nacos v1 版本）
      * @param string $serviceName
+     * @param string $namespaceId
      * @param string $ip
      * @param string $port
      * @param bool $healthy
      * @return array
      */
-    public function updateInstanceHealthy(string $serviceName, string $namespace, string $ip, string $port,bool $healthy=true){
+    public function updateInstanceHealthy(
+        string $serviceName,
+        string $namespaceId,
+        string $ip,
+        string $port,
+        bool $healthy = true
+    ) {
         $data = [
-            'port' => $port,
-            'healthy' => $healthy,
-            'ip' => $ip,
             'serviceName' => $serviceName,
-            'namespaceId'=>$namespace,
+            'namespaceId' => $namespaceId,
+            'ip' => $ip,
+            'port' => $port,
+            'healthy' => $healthy ? 'true' : 'false'
         ];
-        return $this->request('PUT','/nacos/v1/ns/health/instance',$data);
+        return $this->request('put', '/nacos/v1/ns/health/instance', $data);
     }
 
     /**
@@ -388,5 +398,35 @@ class Client
             'ephemeral' => $ephemeral
         ];
         return $this->request('DELETE', '/nacos/v1/ns/instance', $data);
+    }
+
+    // 在 Client 类中修改 updateWeight 方法
+    /**
+     * 更新实例权重（Nacos 1.0 版本兼容）
+     * @param string $serviceName
+     * @param string $namespaceId
+     * @param string $ip
+     * @param string $port
+     * @param float $weight
+     * @param bool $ephemeral
+     * @return array
+     */
+    public function updateWeight(
+        string $serviceName,
+        string $namespaceId,
+        string $ip,
+        string $port,
+        float $weight,
+        bool $ephemeral
+    ) {
+        $data = [
+            'serviceName' => $serviceName,
+            'namespaceId' => $namespaceId,
+            'ip' => $ip,
+            'port' => $port,
+            'weight' => $weight,
+            'ephemeral' => $ephemeral ? 'true' : 'false'
+        ];
+        return $this->request('put', '/nacos/v1/ns/instance', $data);
     }
 }

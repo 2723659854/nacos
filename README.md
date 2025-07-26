@@ -428,6 +428,9 @@ Array
 <br>
 
 以上就是全部用法，你可以将此服务集成到现有的框架中，比如thinkphp，laravel，webman等等。我为什么要这么写呢？因为我们的项目是tp3.2+tp5.1+webman2和laravel混合在一起的。
-#### 写在最后的话
-我是菜鸟，我感觉这么写好像不对，但是又不知道具体哪里不对。对nacos不是很清除。求高手帮忙修改。
+#### 搭建nacos
+
+```bash
+docker run --name nacos -e MODE=standalone --env NACOS_AUTH_ENABLE=true -p 8848:8848 -p 31181:31181 -d nacos/nacos-server:1.3.1
+```
 
