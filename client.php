@@ -9,7 +9,7 @@ use Xiaosongshu\Nacos\JsonRpcClient;
 
 // Nacos配置（与服务端一致）
 $nacosConfig = [
-    'host' => 'http://192.168.110.72:8848',
+    'host' => 'http://192.168.1.3:8848',
     'username' => 'nacos',
     'password' => 'nacos'
 ];
@@ -44,24 +44,29 @@ if ($logoutRes['success']) {
     echo "退出登录失败：{$logoutRes['error']}\n";
 }
 
-
+/** 测试请求超时，是否会触发服务降级 */
+for ($i=0;$i<=100;$i++) {
 // 3. 调用DemoService的add方法（添加用户）
-$addResult = $client->call(
-    'demo', // 服务标识（对应服务端配置中的serviceKey）
-    [
-        'name' => '张三',  // 对应add方法的$name参数
-        'age' => 20        // 对应add方法的$age参数
-    ],
-    'add' // 要调用的方法名（DemoService的add方法）
-);
+    $addResult = $client->call(
+        'demo', // 服务标识（对应服务端配置中的serviceKey）
+        [
+            'name' => '张三'.$i,  // 对应add方法的$name参数
+            'age' => 20        // 对应add方法的$age参数
+        ],
+        'add' // 要调用的方法名（DemoService的add方法）
+    );
 
 // 处理add方法结果
-if ($addResult['success']) {
-    echo "添加用户结果：{$addResult['result']}\n";
-    echo "调用的服务实例：{$addResult['instance']}\n\n";
-} else {
-    echo "添加用户失败：{$addResult['error']}\n\n";
+    if ($addResult['success']) {
+        echo "添加用户结果：{$addResult['result']}\n";
+        echo "调用的服务实例：{$addResult['instance']}\n\n";
+    } else {
+        echo "添加用户失败：{$addResult['error']}\n\n";
+    }
+
+    sleep(1);
 }
+
 
 // 4. 调用DemoService的get方法（查询用户）
 $getResult = $client->call(

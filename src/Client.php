@@ -400,15 +400,16 @@ class Client
         return $this->request('DELETE', '/nacos/v1/ns/instance', $data);
     }
 
-    // 在 Client 类中修改 updateWeight 方法
+
     /**
-     * 更新实例权重（Nacos 1.0 版本兼容）
+     * 更新实例权重（Nacos 1.0 版本兼容，支持保留元数据）
      * @param string $serviceName
      * @param string $namespaceId
      * @param string $ip
      * @param string $port
      * @param float $weight
      * @param bool $ephemeral
+     * @param array|null $metadata 实例元数据（新增参数）
      * @return array
      */
     public function updateWeight(
@@ -417,7 +418,8 @@ class Client
         string $ip,
         string $port,
         float $weight,
-        bool $ephemeral
+        bool $ephemeral,
+        ?array $metadata = null
     ) {
         $data = [
             'serviceName' => $serviceName,
@@ -427,6 +429,12 @@ class Client
             'weight' => $weight,
             'ephemeral' => $ephemeral ? 'true' : 'false'
         ];
+
+        // 如果提供了元数据，则添加到请求中
+        if ($metadata) {
+            $data['metadata'] = json_encode($metadata, JSON_UNESCAPED_UNICODE);
+        }
+
         return $this->request('put', '/nacos/v1/ns/instance', $data);
     }
 }

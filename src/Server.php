@@ -7,15 +7,15 @@ use ReflectionClass;
 use ReflectionMethod;
 
 /**
- * 微服务服务端（支持元数据自动上报，符合JSON-RPC 2.0规范）
+ * 微服务服务端（支持元数据自动上报、服务降级与熔断）
  * 核心特性：
- * 1. 自动解析服务接口元数据（方法、参数、类型）
- * 2. 注册到Nacos时携带元数据，供客户端查询
- * 3. 自动校验客户端请求参数
- * 4. 基于响应超时率和错误率的服务降级与熔断
+ * 1. 自动解析服务接口元数据
+ * 2. 基于超时率的服务降级（动态调整权重）
+ * 3. 基于错误率的服务熔断（标记健康状态）
+ * 4. 每个服务独立统计与调整逻辑
  * @purpose 微服务服务端
  * @author yanglong
- * @time 2025年7月25日17:34:12
+ * @time 2025年7月26日
  */
 class Server
 {
@@ -31,14 +31,17 @@ class Server
     private $statWindowSize;     // 统计窗口大小（最近N个请求）
     private $adjustCoolDown;     // 调整冷却时间（秒）
 
-    /** 请求统计数据 */
-    private $requestStats = [
-        'window' => [],             // 最近请求记录 [{'timeout': bool, 'error': bool, 'time': int}, ...]
-        'currentWeight' => 1.0,     // 当前权重
-        'currentHealthy' => true,   // 当前健康状态
-        'lastWeightAdjust' => 0,    // 上次权重调整时间
-        'lastHealthAdjust' => 0     // 上次健康状态调整时间
-    ];
+    /**
+     * 请求统计数据（按服务标识分组）
+     * 结构：['serviceKey' => [
+     *   'window' => [],
+     *   'currentWeight' => 1.0,
+     *   'currentHealthy' => true,
+     *   'lastWeightAdjust' => 0,
+     *   'lastHealthAdjust' => 0
+     * ]]
+     */
+    private $requestStats = [];
 
     /** 核心组件 */
     private $nacosClient;        // Nacos客户端
@@ -108,17 +111,8 @@ class Server
 
         // 初始化健康检查配置
         $this->timeoutThreshold = $this->config['instance']['timeout_threshold'] ?? 1000; // 默认超时1秒
-        $this->statWindowSize = $this->config['health']['stat_window_size'] ?? 100;      // 默认统计最近100个请求
-        $this->adjustCoolDown = $this->config['health']['adjust_cool_down'] ?? 30;        // 默认冷却30秒
-
-        // 初始化统计数据
-        $this->requestStats = [
-            'window' => [],
-            'currentWeight' => (float)$this->instanceConfig['weight'],
-            'currentHealthy' => true,
-            'lastWeightAdjust' => 0,
-            'lastHealthAdjust' => 0
-        ];
+        $this->statWindowSize = $this->config['health']['stat_window_size'] ?? 100;      // 统计窗口大小
+        $this->adjustCoolDown = $this->config['health']['adjust_cool_down'] ?? 30;        // 冷却时间（秒）
     }
 
     /**
@@ -135,7 +129,7 @@ class Server
     }
 
     /**
-     * 初始化启用的服务（包含元数据解析）
+     * 初始化启用的服务（包含元数据解析和独立统计初始化）
      * @throws Exception
      */
     private function initEnabledServices()
@@ -165,7 +159,16 @@ class Server
                 'nacosServiceName' => $nacosServiceName,
                 'instance' => $serviceInstance,
                 'namespace' => $service['namespace'] ?? 'public',
-                'metadata' => $metadata // 包含接口元数据
+                'metadata' => $metadata
+            ];
+
+            // 为每个服务初始化独立的统计数据
+            $this->requestStats[$serviceKey] = [
+                'window' => [],
+                'currentWeight' => (float)$this->instanceConfig['weight'],
+                'currentHealthy' => true,
+                'lastWeightAdjust' => 0,
+                'lastHealthAdjust' => 0
             ];
 
             echo "[初始化] 已加载服务：{$serviceKey} -> {$serviceClass}（元数据解析完成）\n";
@@ -173,14 +176,13 @@ class Server
     }
 
     /**
-     * 解析服务元数据（序列化为JSON字符串，避免Nacos格式错误）
+     * 解析服务元数据
      */
     private function parseServiceMetadata($serviceInstance, string $serviceKey): array
     {
         $reflection = new ReflectionClass($serviceInstance);
         $methods = [];
 
-        // 遍历所有公共方法
         foreach ($reflection->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
             if ($method->getDeclaringClass()->getName() !== get_class($serviceInstance)) {
                 continue;
@@ -196,45 +198,20 @@ class Server
                 ];
             }
 
-            $methods[$methodName] = [
-                'params' => $params
-            ];
+            $methods[$methodName] = ['params' => $params];
         }
 
-        // 当前服务的契约 就是功能和方法的映射关系
         $contract = $this->serviceConfig[$serviceKey]['contract'] ?? [];
-        // 复杂元数据序列化为JSON字符串
         $complexMetadata = [
             'serviceKey' => $serviceKey,
             'methods' => $methods,
             'contract' => $contract
         ];
 
-        // 返回扁平的键值对（Nacos可接受的格式）
         return [
             'serviceMetadata' => json_encode($complexMetadata, JSON_UNESCAPED_UNICODE),
-            'description' => "{$serviceKey}服务元数据" // 简单描述（非嵌套）
+            'description' => "{$serviceKey}服务元数据"
         ];
-    }
-
-    /**
-     * 从方法注释中提取参数描述（简化实现）
-     */
-    private function getParamDescription(ReflectionMethod $method, string $paramName): string
-    {
-        $comment = $method->getDocComment() ?: '';
-        preg_match("/@param\s+\S+\s+\$$paramName\s+(.*?)\r?\n/", $comment, $matches);
-        return $matches[1] ?? "参数{$paramName}";
-    }
-
-    /**
-     * 从方法注释中提取方法描述
-     */
-    private function getMethodDescription(ReflectionMethod $method): string
-    {
-        $comment = $method->getDocComment() ?: '';
-        preg_match("/\/\*\*\s*(\S.*?)\r?\n/", $comment, $matches);
-        return $matches[1] ?? "未定义描述";
     }
 
     /**
@@ -252,7 +229,7 @@ class Server
     public function run()
     {
         try {
-            $this->registerToNacos(); // 注册到Nacos（携带元数据）
+            $this->registerToNacos();
             $this->startTcpServer();
             register_shutdown_function([$this, 'shutdown']);
             $this->eventLoop();
@@ -264,7 +241,7 @@ class Server
     }
 
     /**
-     * 注册实例到Nacos（携带元数据）
+     * 注册实例到Nacos
      * @throws Exception
      */
     private function registerToNacos()
@@ -275,7 +252,7 @@ class Server
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $service['namespace'],
-                $service['metadata'], // 上报元数据
+                $service['metadata'],
                 (float)$this->instanceConfig['weight'],
                 true,
                 true
@@ -298,13 +275,13 @@ class Server
         $ip = $this->instanceConfig['ip'];
         $port = $this->instanceConfig['port'];
 
-        $this->serverSocket = \socket_create(\AF_INET, \SOCK_STREAM, \SOL_TCP);
+        $this->serverSocket = \socket_create(AF_INET, SOCK_STREAM, SOL_TCP);
         if ($this->serverSocket === false) {
             throw new Exception("创建TCP套接字失败：" . \socket_strerror(\socket_last_error()));
         }
 
         \socket_set_nonblock($this->serverSocket);
-        \socket_set_option($this->serverSocket, \SOL_SOCKET, \SO_REUSEADDR, 1);
+        \socket_set_option($this->serverSocket, SOL_SOCKET, SO_REUSEADDR, 1);
 
         if (\socket_bind($this->serverSocket, '0.0.0.0', $port) === false) {
             throw new Exception("绑定端口失败（{$ip}:{$port}）：" . \socket_strerror(\socket_last_error($this->serverSocket)));
@@ -335,9 +312,11 @@ class Server
                 $lastHeartbeatTime = $now;
             }
 
-            // 定期检查健康状态
+            // 定期检查所有服务的健康状态
             if ($now - $lastCheckTime >= $checkInterval) {
-                $this->checkHealthStatus();
+                foreach (array_keys($this->enabledServices) as $serviceKey) {
+                    $this->checkHealthStatus($serviceKey);
+                }
                 $lastCheckTime = $now;
             }
 
@@ -361,13 +340,13 @@ class Server
                 $service['namespace'],
                 $service['metadata'],
                 true,
-                (float)$this->instanceConfig['weight']
+                $this->requestStats[$service['serviceKey']]['currentWeight'] // 使用当前权重发送心跳
             );
 
             if (isset($result['error'])) {
-                echo "[心跳] 失败（{$service['serviceKey']}）=>{$service['serviceClass']}：{$result['error']}\n";
+                echo "[心跳] 失败（{$service['serviceKey']}）：{$result['error']}\n";
             } else {
-                echo "[心跳] 成功（{$service['serviceKey']}）=>{$service['serviceClass']}（" . date('H:i:s') . "）\n";
+                echo "[心跳] 成功（{$service['serviceKey']}）（" . date('H:i:s') . "）\n";
             }
         }
     }
@@ -450,7 +429,7 @@ class Server
     }
 
     /**
-     * 处理客户端请求（包含参数校验）
+     * 处理客户端请求
      */
     private function handleClientRequest($socket)
     {
@@ -508,17 +487,15 @@ class Server
     }
 
     /**
-     * 处理JSON-RPC请求（包含参数校验和性能统计）
+     * 处理JSON-RPC请求（包含性能统计）
      */
     private function processJsonRpcRequest(string $jsonData): string
     {
-        // 验证JSON格式
         $request = json_decode($jsonData, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
             return $this->buildJsonRpcResponse(null, self::ERROR_PARSE);
         }
 
-        // 验证JSON-RPC规范
         if (!isset($request['jsonrpc']) || $request['jsonrpc'] !== self::JSON_RPC_VERSION
             || !isset($request['method']) || !isset($request['id'])) {
             return $this->buildJsonRpcResponse($request['id'] ?? null, self::ERROR_INVALID_REQUEST);
@@ -528,41 +505,28 @@ class Server
         $method = $request['method'];
         $params = $request['params'] ?? [];
 
-        // 解析方法（格式：服务标识.方法名，如login.login）
         $methodParts = explode('.', $method, 2);
         if (count($methodParts) !== 2) {
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32600,
-                'message' => 'method格式错误（应为：服务标识.方法名，如login.login）'
+                'message' => 'method格式错误（应为：服务标识.方法名）'
             ]);
         }
-        // 解析用户请求的服务和方法
-        list($serviceKey,  $funcName) = $methodParts;
+        list($serviceKey, $funcName) = $methodParts;
 
-        // 验证服务标识是否存在
         if (!isset($this->enabledServices[$serviceKey])) {
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32601,
                 'message' => "服务不存在（标识：{$serviceKey}），可用服务：" . implode(',', array_keys($this->enabledServices))
             ]);
         }
-        // 获取服务类
-        $service = $this->enabledServices[$serviceKey];
-        // 获取服务的元数据
-        $serviceMetadata = $service["metadata"]['serviceMetadata']??"";
-        if ($serviceMetadata) {
-            $serviceMetadata = json_decode($serviceMetadata, true);
-            // 获取契约
-            $contract = $serviceMetadata['contract'] ?? [];
-        }else{
-            $contract = [];
-        }
 
-        // 如果定义了契约，则调用契约，否则调用原来的方法
+        $service = $this->enabledServices[$serviceKey];
+        $serviceInstance = $service['instance'];
+        $serviceMetadata = $service["metadata"]['serviceMetadata'] ?? "";
+        $contract = $serviceMetadata ? json_decode($serviceMetadata, true)['contract'] ?? [] : [];
         $methodName = $contract[$funcName] ?? $funcName;
 
-        // 验证方法是否存在
-        $serviceInstance = $service['instance'];
         if (!method_exists($serviceInstance, $methodName)) {
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32601,
@@ -570,11 +534,8 @@ class Server
             ]);
         }
 
-        // 验证参数（基于元数据）
-        $paramValidation = $this->validateParams(
-            $params,
-            $service['metadata']['methods'][$methodName]['params'] ?? []
-        );
+        $paramRules = $service['metadata']['methods'][$methodName]['params'] ?? [];
+        $paramValidation = $this->validateParams($params, $paramRules);
         if (!$paramValidation['valid']) {
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32602,
@@ -582,24 +543,18 @@ class Server
             ]);
         }
 
-        // 调用服务方法并记录性能
-        $startTime = microtime(true) * 1000; // 开始时间（毫秒）
+        // 记录请求处理时间用于超时判断
+        $startTime = microtime(true) * 1000;
         try {
             $result = call_user_func_array([$serviceInstance, $methodName], $params);
             $endTime = microtime(true) * 1000;
-            $duration = $endTime - $startTime;
-
-            // 判断是否超时
-            $isTimeout = $duration > $this->timeoutThreshold;
-            $this->recordRequestStats($isTimeout, false); // 记录正常请求（可能超时）
-
+            $isTimeout = ($endTime - $startTime) > $this->timeoutThreshold;
+            $this->recordRequestStats($serviceKey, $isTimeout, false);
             return $this->buildJsonRpcResponse($requestId, null, $result);
         } catch (Exception $e) {
             $endTime = microtime(true) * 1000;
-            $duration = $endTime - $startTime;
-            $isTimeout = $duration > $this->timeoutThreshold;
-
-            $this->recordRequestStats($isTimeout, true); // 记录错误请求（可能超时）
+            $isTimeout = ($endTime - $startTime) > $this->timeoutThreshold;
+            $this->recordRequestStats($serviceKey, $isTimeout, true);
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32603,
                 'message' => "方法调用异常：{$e->getMessage()}"
@@ -608,11 +563,10 @@ class Server
     }
 
     /**
-     * 基于元数据验证参数
+     * 验证参数
      */
     private function validateParams(array $params, array $paramRules): array
     {
-        // 检查参数数量是否匹配（必填项+可选参数）
         $requiredCount = count(array_filter($paramRules, function($rule) {
             return $rule['required'];
         }));
@@ -623,9 +577,7 @@ class Server
             ];
         }
 
-        // 检查每个参数的类型
         foreach ($paramRules as $index => $rule) {
-            // 跳过可选参数（未传参时不校验）
             if (!isset($params[$index]) && !$rule['required']) {
                 continue;
             }
@@ -634,13 +586,7 @@ class Server
             $paramType = gettype($paramValue);
             $expectedType = $rule['type'];
 
-            // 类型映射（PHP类型与声明类型的对应）
-            // todo 这个类型是不是太少了，会不会还有字符串类型呢
-            $typeMap = [
-                'integer' => 'int',
-                'boolean' => 'bool',
-                'double' => 'float'
-            ];
+            $typeMap = ['integer' => 'int', 'boolean' => 'bool', 'double' => 'float'];
             $actualType = $typeMap[$paramType] ?? $paramType;
 
             if ($actualType !== $expectedType && $expectedType !== 'mixed') {
@@ -694,7 +640,6 @@ class Server
     {
         echo "\n[退出] 开始清理资源...\n";
 
-        // 从Nacos注销实例
         foreach ($this->enabledServices as $service) {
             $this->nacosClient->removeInstance(
                 $service['nacosServiceName'],
@@ -706,12 +651,10 @@ class Server
             echo "[退出] 已注销服务：{$service['serviceKey']}\n";
         }
 
-        // 关闭客户端连接
         foreach ($this->clients as $socket) {
             \socket_close($socket);
         }
 
-        // 关闭TCP服务
         if ($this->serverSocket) {
             \socket_close($this->serverSocket);
         }
@@ -720,30 +663,37 @@ class Server
     }
 
     /**
-     * 记录请求统计信息
+     * 记录请求统计（按服务分组）
      */
-    private function recordRequestStats(bool $isTimeout, bool $isError)
+    private function recordRequestStats(string $serviceKey, bool $isTimeout, bool $isError)
     {
-        $this->requestStats['window'][] = [
+        if (!isset($this->requestStats[$serviceKey])) {
+            return;
+        }
+
+        $this->requestStats[$serviceKey]['window'][] = [
             'timeout' => $isTimeout,
             'error' => $isError,
             'time' => time()
         ];
 
-        // 保持窗口大小（只保留最近N条记录）
-        if (count($this->requestStats['window']) > $this->statWindowSize) {
-            array_shift($this->requestStats['window']);
+        // 保持窗口大小
+        if (count($this->requestStats[$serviceKey]['window']) > $this->statWindowSize) {
+            array_shift($this->requestStats[$serviceKey]['window']);
         }
     }
 
     /**
-     * 检查健康状态并触发降级/熔断
+     * 检查单个服务的健康状态
      */
-    private function checkHealthStatus()
+    private function checkHealthStatus(string $serviceKey)
     {
-        $window = $this->requestStats['window'];
+        $stats = $this->requestStats[$serviceKey];
+        $window = $stats['window'];
         $totalRequests = count($window);
-        if ($totalRequests < 10) { // 至少10个请求才开始计算（避免小样本误差）
+
+        // 至少需要10个请求才计算（避免小样本误差）
+        if ($totalRequests < 10) {
             return;
         }
 
@@ -758,110 +708,126 @@ class Server
         $errorRate = $errorCount / $totalRequests;
         $now = time();
 
-        // 处理错误率（熔断逻辑）
-        $this->handleErrorRate($errorRate, $now);
+        // 处理错误率（熔断）
+        $this->handleErrorRate($serviceKey, $errorRate, $now);
 
-        // 处理超时率（降级逻辑）
-        $this->handleTimeoutRate($timeoutRate, $now);
+        // 处理超时率（降级）
+        $this->handleTimeoutRate($serviceKey, $timeoutRate, $now);
     }
 
     /**
      * 处理错误率（熔断逻辑）
      */
-    private function handleErrorRate(float $errorRate, int $now)
+    private function handleErrorRate(string $serviceKey, float $errorRate, int $now)
     {
-        $coolDownPassed = ($now - $this->requestStats['lastHealthAdjust']) > $this->adjustCoolDown;
+        $service = $this->enabledServices[$serviceKey];
+        $stats = $this->requestStats[$serviceKey];
+        $coolDownPassed = ($now - $stats['lastHealthAdjust']) > $this->adjustCoolDown;
+        $metadata = $service['metadata']; // 获取服务元数据
 
         // 错误率≥50% 且 冷却时间已过 且 当前健康
-        if ($errorRate >= 0.5 && $coolDownPassed && $this->requestStats['currentHealthy']) {
-            foreach ($this->enabledServices as $service) {
-                $result = $this->nacosClient->updateInstanceHealthy(
-                    $service['nacosServiceName'],
-                    $service['namespace'],
-                    $this->instanceConfig['ip'],
-                    $this->instanceConfig['port'],
-                    false
-                );
-                if (isset($result['error'])) {
-                    echo "[熔断失败] 错误率{$errorRate}: {$result['error']}\n";
-                } else {
-                    echo "[触发熔断] 错误率{$errorRate}，实例已标记为不健康\n";
-                    $this->requestStats['currentHealthy'] = false;
-                    $this->requestStats['lastHealthAdjust'] = $now;
-                }
+        if ($errorRate >= 0.5 && $coolDownPassed && $stats['currentHealthy']) {
+            $result = $this->nacosClient->updateInstanceHealthy(
+                $service['nacosServiceName'],
+                $service['namespace'],
+                $this->instanceConfig['ip'],
+                $this->instanceConfig['port'],
+                false,
+                false, // 不清除元数据
+                $metadata // 显式传递元数据
+            );
+            if (isset($result['error'])) {
+                echo "[{$serviceKey}服务] 熔断失败（错误率{$errorRate}）：{$result['error']}\n";
+            } else {
+                echo "[{$serviceKey}服务] 触发熔断（错误率{$errorRate}），标记为不健康\n";
+                $this->requestStats[$serviceKey]['currentHealthy'] = false;
+                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
             }
+            return;
         }
 
-        // 错误率<50% 且 冷却时间已过 且 当前不健康（恢复健康）
-        if ($errorRate < 0.5 && $coolDownPassed && !$this->requestStats['currentHealthy']) {
-            foreach ($this->enabledServices as $service) {
-                $result = $this->nacosClient->updateInstanceHealthy(
-                    $service['nacosServiceName'],
-                    $service['namespace'],
-                    $this->instanceConfig['ip'],
-                    $this->instanceConfig['port'],
-                    true
-                );
-                if (isset($result['error'])) {
-                    echo "[恢复健康失败] 错误率{$errorRate}: {$result['error']}\n";
-                } else {
-                    echo "[恢复健康] 错误率{$errorRate}，实例已标记为健康\n";
-                    $this->requestStats['currentHealthy'] = true;
-                    $this->requestStats['lastHealthAdjust'] = $now;
-                }
+        // 错误率<50% 且 冷却时间已过 且 当前不健康（恢复）
+        if ($errorRate < 0.5 && $coolDownPassed && !$stats['currentHealthy']) {
+            $result = $this->nacosClient->updateInstanceHealthy(
+                $service['nacosServiceName'],
+                $service['namespace'],
+                $this->instanceConfig['ip'],
+                $this->instanceConfig['port'],
+                true,
+                false, // 不清除元数据
+                $metadata // 显式传递元数据
+            );
+            if (isset($result['error'])) {
+                echo "[{$serviceKey}服务] 恢复健康失败（错误率{$errorRate}）：{$result['error']}\n";
+            } else {
+                echo "[{$serviceKey}服务] 恢复健康（错误率{$errorRate}），标记为健康\n";
+                $this->requestStats[$serviceKey]['currentHealthy'] = true;
+                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
             }
         }
     }
 
     /**
-     * 处理超时率（降级逻辑）
+     * 处理超时率（降级逻辑，支持逐步恢复）
      */
-    private function handleTimeoutRate(float $timeoutRate, int $now)
+    private function handleTimeoutRate(string $serviceKey, float $timeoutRate, int $now)
     {
+        $service = $this->enabledServices[$serviceKey];
+        $stats = $this->requestStats[$serviceKey];
         $originalWeight = (float)$this->instanceConfig['weight'];
-        $coolDownPassed = ($now - $this->requestStats['lastWeightAdjust']) > $this->adjustCoolDown;
+        $coolDownPassed = ($now - $stats['lastWeightAdjust']) > $this->adjustCoolDown;
+        $currentWeight = $stats['currentWeight'];
+        $metadata = $service['metadata'];
+        $ephemeral = true; // 统一使用临时实例（与注册时保持一致）
 
-        // 超时率≥50% 且 冷却时间已过 且 权重未降到最低
-        if ($timeoutRate >= 0.5 && $coolDownPassed && $this->requestStats['currentWeight'] > 0.1) {
-            $newWeight = max(0.1, $this->requestStats['currentWeight'] * 0.5); // 每次降为当前50%，最低0.1
-            foreach ($this->enabledServices as $service) {
-                $result = $this->nacosClient->updateWeight(
-                    $service['nacosServiceName'],
-                    $service['namespace'],
-                    $this->instanceConfig['ip'],
-                    $this->instanceConfig['port'],
-                    $newWeight,
-                    true
-                );
-                if (isset($result['error'])) {
-                    echo "[降级失败] 超时率{$timeoutRate}: {$result['error']}\n";
-                } else {
-                    echo "[触发降级] 超时率{$timeoutRate}，权重从{$this->requestStats['currentWeight']}调整为{$newWeight}\n";
-                    $this->requestStats['currentWeight'] = $newWeight;
-                    $this->requestStats['lastWeightAdjust'] = $now;
-                }
+        // 降级逻辑：超时率≥50% 且 冷却时间已过 且 权重未到最低
+        if ($timeoutRate >= 0.5 && $coolDownPassed) {
+            $newWeight = max(0.1, $currentWeight * 0.5);
+            if (abs($newWeight - $currentWeight) < 0.001) {
+                return;
             }
+            $result = $this->nacosClient->updateWeight(
+                $service['nacosServiceName'],
+                $service['namespace'],
+                $this->instanceConfig['ip'],
+                $this->instanceConfig['port'],
+                $newWeight,
+                $ephemeral, // 使用统一的ephemeral设置
+                $metadata
+            );
+            if (isset($result['error'])) {
+                echo "[{$serviceKey}服务] 降级失败（超时率{$timeoutRate}）：{$result['error']}\n";
+            } else {
+                echo "[{$serviceKey}服务] 触发降级（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
+                $this->requestStats[$serviceKey]['currentWeight'] = $newWeight;
+                $this->requestStats[$serviceKey]['lastWeightAdjust'] = $now;
+            }
+            return;
         }
 
-        // 超时率<50% 且 冷却时间已过 且 权重未恢复到原始值
-        if ($timeoutRate < 0.5 && $coolDownPassed && $this->requestStats['currentWeight'] < $originalWeight) {
-            $newWeight = min($originalWeight, $this->requestStats['currentWeight'] * 2); // 每次恢复为当前2倍，不超过原始值
-            foreach ($this->enabledServices as $service) {
-                $result = $this->nacosClient->updateWeight(
-                    $service['nacosServiceName'],
-                    $service['namespace'],
-                    $this->instanceConfig['ip'],
-                    $this->instanceConfig['port'],
-                    $newWeight,
-                    true
-                );
-                if (isset($result['error'])) {
-                    echo "[恢复权重失败] 超时率{$timeoutRate}: {$result['error']}\n";
-                } else {
-                    echo "[恢复权重] 超时率{$timeoutRate}，权重从{$this->requestStats['currentWeight']}调整为{$newWeight}\n";
-                    $this->requestStats['currentWeight'] = $newWeight;
-                    $this->requestStats['lastWeightAdjust'] = $now;
-                }
+        // 恢复逻辑
+        if ($coolDownPassed && $currentWeight < $originalWeight) {
+            $recoveryFactor = 1 + (0.5 - $timeoutRate) * 2;
+            $newWeight = min($originalWeight, $currentWeight * $recoveryFactor);
+            if (abs($newWeight - $currentWeight) < 0.001) {
+                return;
+            }
+
+            $result = $this->nacosClient->updateWeight(
+                $service['nacosServiceName'],
+                $service['namespace'],
+                $this->instanceConfig['ip'],
+                $this->instanceConfig['port'],
+                $newWeight,
+                $ephemeral, // 使用统一的ephemeral设置
+                $metadata
+            );
+            if (isset($result['error'])) {
+                echo "[{$serviceKey}服务] 恢复权重失败（超时率{$timeoutRate}）：{$result['error']}\n";
+            } else {
+                echo "[{$serviceKey}服务] 恢复权重（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
+                $this->requestStats[$serviceKey]['currentWeight'] = $newWeight;
+                $this->requestStats[$serviceKey]['lastWeightAdjust'] = $now;
             }
         }
     }

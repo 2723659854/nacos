@@ -17,6 +17,10 @@ class DemoService
      */
     public function add(string $name, int $age): string
     {
+        $needSleep=file_get_contents(__DIR__."/demo.txt");
+        if (!empty($needSleep)){
+            throw new \Exception("测试抛出异常，服务熔断");
+        }
         return "用户添加成功！姓名：{$name}，年龄：{$age}（服务端处理时间：" . date('H:i:s') . "）";
     }
 
