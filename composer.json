@@ -1,6 +1,6 @@
 {
     "name": "xiaosongshu/nacos",
-    "description": "简单的php版本nacos客户端",
+    "description": "A SDK for nacos service written in PHP. 简单的php版本nacos客户端",
     "type": "library",
     "license": "MIT",
     "autoload": {
