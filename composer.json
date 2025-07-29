@@ -19,6 +19,7 @@
         "php": ">=7.1",
         "guzzle/http": "^3.9",
         "guzzlehttp/guzzle": "*",
-        "ext-json": "*"
+        "ext-json": "*",
+        "ext-sockets": "*"
     }
 }

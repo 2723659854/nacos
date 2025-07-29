@@ -162,6 +162,8 @@ class JsonRpcClient
     /**
      * 负载均衡选择实例：优先选择访问次数少、权重高的实例
      * 算法：计算每个实例的"负载分数" = 访问次数 / 权重，分数越低越优先
+     * @param string $serviceKey 服务名
+     * @return array
      */
     private function selectInstanceByLoadBalance(string $serviceKey): array
     {
@@ -189,6 +191,10 @@ class JsonRpcClient
 
     /**
      * 从Nacos刷新服务实例（同步更新访问计数器）
+     * @param string $serviceKey 服务名
+     * @param string $nacosServiceName nacos服务器上服务名
+     * @return void
+     * @throws \Exception
      */
     private function refreshInstances(string $serviceKey, string $nacosServiceName)
     {
@@ -242,6 +248,8 @@ class JsonRpcClient
 
     /**
      * 生成安全的Nacos服务名（与服务端保持一致）
+     * @param string $serviceKey 服务名
+     * @return string
      */
     private function generateSafeNacosName(string $serviceKey): string
     {
@@ -252,6 +260,9 @@ class JsonRpcClient
 
     /**
      * 校验业务参数是否符合元数据规则
+     * @param array $businessParams 参数
+     * @param array $paramRules 顺序
+     * @return array|true[]
      */
     private function validateParams(array $businessParams, array $paramRules): array
     {
@@ -295,6 +306,9 @@ class JsonRpcClient
 
     /**
      * 将键值对参数转换为服务端所需的顺序数组
+     * @param array $businessParams 参数
+     * @param array $paramRules 参数顺序
+     * @return array
      */
     private function convertParamsToOrdered(array $businessParams, array $paramRules): array
     {
@@ -308,6 +322,12 @@ class JsonRpcClient
 
     /**
      * 发起JSON-RPC请求
+     * @param string $serviceKey 服务名
+     * @param string $method 请求方法
+     * @param array $params 参数
+     * @param array $instance 实例
+     * @return array
+     * @throws \Exception
      */
     private function request(string $serviceKey, string $method, array $params, array $instance): array
     {
@@ -319,8 +339,9 @@ class JsonRpcClient
                 throw new \Exception("创建连接失败：" . \socket_strerror(\socket_last_error()));
             }
 
-            // 设置超时
+            // 设置接收超时
             \socket_set_option($socket, \SOL_SOCKET, \SO_RCVTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
+            // 设置发送超时
             \socket_set_option($socket, \SOL_SOCKET, \SO_SNDTIMEO, ['sec' => $this->timeout, 'usec' => 0]);
 
             // 连接实例
@@ -346,16 +367,23 @@ class JsonRpcClient
 
             // 接收响应
             $responseJson = '';
+            // 执行截止时间
             $timeout = time() + $this->timeout;
+            // 若响应时间超过最大时间则退出
             while (time() < $timeout) {
+                // 读取数据
                 $buffer = \socket_read($socket, 4096);
+                // 没有读取到数据，则暂停一下，继续读取数据
                 if ($buffer === false) {
                     usleep(100000);
                     continue;
                 }
+                // 拼接响应数据
                 $responseJson .= $buffer;
+                // 当读取到一列结束符的时候，则不再读取
                 if (strpos($responseJson, "\n") !== false) break;
             }
+            // 修剪读取的数据
             $responseJson = trim($responseJson);
 
             if ($responseJson === '') {
@@ -395,6 +423,9 @@ class JsonRpcClient
 
     /**
      * 强制刷新缓存（同步更新访问计数器）
+     * @param string $serviceKey 服务名
+     * @return void
+     * @throws \Exception
      */
     public function refreshCache(string $serviceKey = '')
     {
@@ -413,6 +444,8 @@ class JsonRpcClient
 
     /**
      * 重置实例访问计数（用于手动平衡负载）
+     * @param string $serviceKey 服务名
+     * @return void
      */
     public function resetAccessCount(string $serviceKey = '')
     {

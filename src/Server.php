@@ -80,6 +80,7 @@ class Server
 
     /**
      * 验证配置合法性
+     * @return void
      * @throws Exception
      */
     private function validateConfig()
@@ -104,6 +105,7 @@ class Server
 
     /**
      * 初始化配置参数
+     * @return void
      */
     private function initConfig()
     {
@@ -120,6 +122,7 @@ class Server
 
     /**
      * 初始化Nacos客户端
+     * @return void
      * @throws Exception
      */
     private function initNacosClient()
@@ -133,6 +136,7 @@ class Server
 
     /**
      * 初始化启用的服务（包含元数据解析和独立统计初始化）
+     * @return void
      * @throws Exception
      */
     private function initEnabledServices()
@@ -183,6 +187,10 @@ class Server
 
     /**
      * 解析服务元数据
+     * @param object $serviceInstance
+     * @param string $serviceKey
+     * @return array
+     * @throws \ReflectionException
      */
     private function parseServiceMetadata($serviceInstance, string $serviceKey): array
     {
@@ -222,6 +230,8 @@ class Server
 
     /**
      * 生成安全的Nacos服务名
+     * @param string $serviceKey 服务名
+     * @return string
      */
     private function generateSafeNacosName(string $serviceKey): string
     {
@@ -231,6 +241,7 @@ class Server
 
     /**
      * 启动服务（核心入口）
+     * @return void
      */
     public function run()
     {
@@ -248,6 +259,7 @@ class Server
 
     /**
      * 注册实例到Nacos
+     * @return void
      * @throws Exception
      */
     private function registerToNacos()
@@ -274,6 +286,7 @@ class Server
 
     /**
      * 启动TCP服务
+     * @return void
      * @throws Exception
      */
     private function startTcpServer()
@@ -302,6 +315,7 @@ class Server
 
     /**
      * 事件循环（处理请求+心跳+健康检查）
+     * @return mixed
      */
     private function eventLoop()
     {
@@ -335,6 +349,7 @@ class Server
 
     /**
      * 发送Nacos心跳（仅发送启用了心跳的服务）
+     * @return void
      */
     private function sendNacosHeartbeat()
     {
@@ -366,6 +381,7 @@ class Server
 
     /**
      * 处理TCP请求
+     * @return void
      */
     private function handleTcpRequests()
     {
@@ -420,6 +436,7 @@ class Server
 
     /**
      * 处理新客户端连接
+     * @return void
      */
     private function handleNewConnection()
     {
@@ -443,6 +460,8 @@ class Server
 
     /**
      * 处理客户端请求
+     * @param resource $socket 客户端
+     * @return void
      */
     private function handleClientRequest($socket)
     {
@@ -473,6 +492,8 @@ class Server
 
     /**
      * 发送客户端响应
+     * @param resource $socket 客户端连接
+     * @return void
      */
     private function sendClientResponse($socket)
     {
@@ -501,6 +522,8 @@ class Server
 
     /**
      * 处理JSON-RPC请求（包含性能统计）
+     * @param string $jsonData
+     * @return string
      */
     private function processJsonRpcRequest(string $jsonData): string
     {
@@ -577,6 +600,9 @@ class Server
 
     /**
      * 验证参数
+     * @param array $params 参数
+     * @param array $paramRules 顺序
+     * @return array
      */
     private function validateParams(array $params, array $paramRules): array
     {
@@ -615,6 +641,10 @@ class Server
 
     /**
      * 构建JSON-RPC响应
+     * @param $id
+     * @param array|null $error
+     * @param $result
+     * @return string
      */
     private function buildJsonRpcResponse($id, ?array $error, $result = null): string
     {
@@ -632,6 +662,8 @@ class Server
 
     /**
      * 关闭客户端连接
+     * @param $socket
+     * @return void
      */
     private function closeClient($socket)
     {
@@ -648,6 +680,7 @@ class Server
 
     /**
      * 优雅退出
+     * @return void
      */
     public function shutdown()
     {
@@ -677,6 +710,10 @@ class Server
 
     /**
      * 记录请求统计（按服务分组）
+     * @param string $serviceKey 服务名
+     * @param bool $isTimeout 是否超时
+     * @param bool $isError 是否发生了错误
+     * @return void
      */
     private function recordRequestStats(string $serviceKey, bool $isTimeout, bool $isError)
     {
@@ -698,6 +735,8 @@ class Server
 
     /**
      * 检查单个服务的健康状态
+     * @param string $serviceKey 服务名
+     * @return void
      */
     private function checkHealthStatus(string $serviceKey)
     {
@@ -731,6 +770,10 @@ class Server
     /**
      * 处理错误率（熔断逻辑：通过控制心跳实现）
      * 临时实例不允许手动修改健康状态，通过停止/恢复心跳让Nacos自动标记健康状态
+     * @param string $serviceKey
+     * @param float $errorRate
+     * @param int $now
+     * @return void
      */
     private function handleErrorRate(string $serviceKey, float $errorRate, int $now)
     {
@@ -764,6 +807,10 @@ class Server
 
     /**
      * 处理超时率（降级逻辑，支持逐步恢复）
+     * @param string $serviceKey 服务名
+     * @param float $timeoutRate 超时率
+     * @param int $now 当前时间
+     * @return void
      */
     private function handleTimeoutRate(string $serviceKey, float $timeoutRate, int $now)
     {
