@@ -208,7 +208,8 @@ class JsonRpcClient
             throw new \Exception("从Nacos获取{$serviceKey}实例失败：{$response['error']}");
         }
 
-        $content = json_decode($response['content'], true);
+
+        $content = $response['content'];
         $newInstances = $content['hosts'] ?? [];
         $newInstanceKeys = []; // 新实例的ip:port集合
 

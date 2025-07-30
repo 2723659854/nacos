@@ -9,7 +9,7 @@ use Xiaosongshu\Nacos\JsonRpcClient;
 
 // Nacos配置（与服务端一致）
 $nacosConfig = [
-    'host' => 'http://192.168.1.3:8848',
+    'host' => 'http://127.0.0.1:8848',
     'username' => 'nacos',
     'password' => 'nacos'
 ];

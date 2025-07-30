@@ -4,7 +4,7 @@ return [
 
     /** 连接服务器的基本配置 */
     'server'=>[
-        'host'=>'http://192.168.1.3:8848',
+        'host'=>'http://127.0.0.1:8848',
         'username'=>'nacos',
         'password'=>'nacos',
         'heartbeat_interval' => 5, // 心跳间隔（秒，默认5秒）
@@ -12,7 +12,7 @@ return [
 
     /** 服务提供者实例的配置 */
     'instance'=>[
-        'ip'=>'192.168.1.3',
+        'ip'=>'127.0.0.1',
         'port'=>'8000',
         'weight'=>99, // 初始权重（降级时会动态调整）
         'timeout_threshold' => 1000, // 超时阈值（毫秒，超过此时间视为超时，用于计算超时率）
