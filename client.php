@@ -63,8 +63,6 @@ for ($i=0;$i<=10;$i++) {
     } else {
         echo "添加用户失败：{$addResult['error']}\n\n";
     }
-
-    sleep(1);
 }
 
 

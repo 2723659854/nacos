@@ -7,6 +7,10 @@ $dataId      = 'CalculatorService';
 $group       = 'api';
 $serviceName = 'father';
 $namespace   = 'public';
+
+$config = include __DIR__.'/config.php';
+var_dump($config);exit;
+
 $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
 var_dump("发布配置");
 /** 发布配置 */

@@ -64,6 +64,9 @@ class Server
     const ERROR_INVALID_PARAMS = ['code' => -32602, 'message' => '参数无效（类型或必填项错误）'];
     const ERROR_INTERNAL = ['code' => -32603, 'message' => '服务端内部错误'];
 
+    /** 需要监听的配置 */
+    private $configListen = [];
+
     /**
      * 构造函数：初始化配置与组件
      * @param array $config 配置数组
@@ -75,7 +78,26 @@ class Server
         $this->validateConfig();
         $this->initConfig();
         $this->initNacosClient();
-        $this->initEnabledServices(); // 初始化服务并解析元数据
+        $this->initEnabledServices();
+        $this->initConfigListen();
+    }
+
+    /**
+     * 读取需要监听的配置
+     * @return void
+     */
+    private function initConfigListen()
+    {
+        foreach ($this->config['config'] ?? [] as $name => $config) {
+            $this->configListen[$name] = $config;
+            if (file_exists($config['file'])) {
+                $this->configListen[$name]['content'] = @file_get_contents($config['file']);
+                echo "[初始化] 已加载配置：{$name} -> {$config['file']}（配置解析完成）\n";
+            } else {
+                $this->configListen[$name]['content'] = "";
+                echo "[初始化] 已加载配置：{$name} -> {$config['file']}（配置文件不存在）\n";
+            }
+        }
     }
 
     /**
@@ -98,8 +120,18 @@ class Server
                 break;
             }
         }
-        if (!$hasEnabledService) {
-            throw new Exception("至少需要启用一个服务（service中enable=true）");
+
+
+        $hasEnabledConfig = false;
+        foreach ($this->config['config'] ?? [] as $name => $config) {
+            if (!empty($config['enable'])) {
+                $hasEnabledConfig = true;
+                break;
+            }
+        }
+
+        if (!$hasEnabledService && !$hasEnabledConfig) {
+            throw new Exception("至少需要启用一个服务（service中enable=true）或者需要被监听的配置(config中enable=true)");
         }
     }
 
@@ -247,6 +279,7 @@ class Server
     {
         try {
             $this->registerToNacos();
+            $this->publishConfig();
             $this->startTcpServer();
             register_shutdown_function([$this, 'shutdown']);
             $this->eventLoop();
@@ -254,6 +287,23 @@ class Server
             echo "[错误] 服务启动失败：{$e->getMessage()}\n";
             $this->shutdown();
             exit(1);
+        }
+    }
+
+    /**
+     * 发布配置到服务器
+     * @return void
+     */
+    private function publishConfig()
+    {
+        foreach ($this->configListen as $name => $config) {
+            if (empty($config['enable'])) {
+                continue;
+            }
+            if (!empty($config['content'])) {
+                $this->nacosClient->publishConfig($config['dataId'], $config['group'], $config['content']);
+                echo "[初始化] 已发布配置：{$name}（本地配置发布完毕）\n";
+            }
         }
     }
 
@@ -343,7 +393,47 @@ class Server
             // 处理TCP请求
             $this->handleTcpRequests();
 
+            // 每隔10秒监听一次nacos服务器上的配置
+            if (time() % 30 == 0) {
+                $this->listenConfigFromNacos();
+            }
             usleep(10000);
+        }
+    }
+
+    /**
+     * 从服务器上监听配置变化并更新本地配置文件
+     * @return void
+     * @note 这个配置监听是阻塞的，
+     */
+    public function listenConfigFromNacos()
+    {
+        foreach ($this->configListen as $name => $config) {
+            if (empty($config['enable'])) {
+                continue;
+            }
+            # 监听服务器上的配置
+            $search = $this->nacosClient->listenerConfig($config['dataId'], $config['group'], $config['content']);
+            if ($search['code'] == 200 && $search['content']){
+                echo "[config] 监听{$name} 已变化\n";
+                $configFromNacos = $this->nacosClient->getConfig($config['dataId'], $config['group'],'public');
+                if ($configFromNacos['code'] == 200) {
+                    $content = $configFromNacos['content'];
+                    $this->configListen[$name]['content'] = $content;
+                    if ($config['callback']&& is_callable($config['callback'])) {
+                        try{
+                            call_user_func($config['callback'], $content);
+                            echo "[config] 更新{$name} 配置成功\n";
+                        }catch (\Exception $e){
+                            echo "[config] 更新{$name} 配置失败\n";
+                        }
+                    }
+                }else{
+                    echo "[config] 读取{$name} 配置失败\n";
+                }
+            }else{
+                echo "[config] 监听{$name} 配置没有变化\n";
+            }
         }
     }
 
@@ -606,7 +696,7 @@ class Server
      */
     private function validateParams(array $params, array $paramRules): array
     {
-        $requiredCount = count(array_filter($paramRules, function($rule) {
+        $requiredCount = count(array_filter($paramRules, function ($rule) {
             return $rule['required'];
         }));
         if (count($params) < $requiredCount) {
