@@ -356,7 +356,7 @@ class Server
         foreach ($this->enabledServices as $serviceKey => $service) {
             // 跳过关闭心跳的服务（熔断中）
             if (!$this->sendHeartbeat[$serviceKey]) {
-                echo "[心跳] 已停止（{$serviceKey}）（" . date('H:i:s') . "）\n";
+                echo "[心跳] 已停止（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
                 continue;
             }
 
@@ -372,9 +372,9 @@ class Server
             );
 
             if (isset($result['error'])) {
-                echo "[心跳] 失败（{$serviceKey}）：{$result['error']}\n";
+                echo "[心跳] 失败（{$serviceKey}）->{$service['serviceClass']}：{$result['error']}\n";
             } else {
-                echo "[心跳] 成功（{$serviceKey}）（" . date('H:i:s') . "）\n";
+                echo "[心跳] 成功（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
             }
         }
     }
