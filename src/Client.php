@@ -19,6 +19,10 @@ class Client
     protected  $token;
     /** @var string $host nacos服务器地址 */
     protected  $host = 'http://127.0.0.1:8848';
+    /** 用户名 */
+    protected $user = "nacos";
+    /** 密码 */
+    protected $pass = "nacos";
 
     /** 分隔符 */
     public const WORD_SEPARATOR = "\x02";
@@ -26,6 +30,7 @@ class Client
     public const LINE_SEPARATOR = "\x01";
 
     /**
+     * 初始化
      * @param string $host nacos主机
      * @param string $user 账号
      * @param string $pass 密码
@@ -33,39 +38,52 @@ class Client
      */
     public function __construct(string $host='http://127.0.0.1:8848',string $user='nacos',string $pass='nacos')
     {
+        if (!empty($host)) {
+            $this->host = $host;
+        }
+
+        if (!empty($user)) {
+            $this->user = $user;
+        }
+
+        if (!empty($pass)) {
+            $this->pass = $pass;
+        }
 
         $client       = new HttpClient([
-            'base_uri' => $host,
+            'proxy' => null,
+            'base_uri' => $this->host,
         ]);
 
         $response = $client->request('post', '/nacos/v1/auth/login', [
             RequestOptions::QUERY => [
-                'username' => $user,
-                'password' => $pass
+                'username' => $this->user,
+                'password' => $this->pass
             ]
         ]);
 
         $status   = $response->getStatusCode();
         if ($status == 200) {
             $data        = json_decode($response->getBody()->getContents(), true);
+            var_dump($data);
             $this->token = $data['accessToken'];
         } else {
             $this->token = null;
         }
         $this->client = $client;
         if ($this->token == null) {
-            throw new \Exception("无法获取token，停止运行");
+            throw new \Exception("无法获取token");
         }
     }
 
     /**
      * 公共请求方法
-     * @param $method
-     * @param $url
-     * @param $params
+     * @param string $method 请求方法
+     * @param string $url 请求地址
+     * @param array $params 请求参数
      * @return array
      */
-    protected function request($method, $url, $params)
+    protected function request(string $method, string $url, array $params)
     {
         if (strtolower($method) == 'post') {
             $data = [
@@ -94,9 +112,9 @@ class Client
 
     /**
      * 发布配置
-     * @param string $dataId
-     * @param string $group
-     * @param string $content
+     * @param string $dataId 唯一标识符
+     * @param string $group 所属分组
+     * @param string $content 本地配置内容
      * @return array
      */
     public function publishConfig(string $dataId, string $group, string $content): array
@@ -111,9 +129,9 @@ class Client
 
     /**
      * 监听配置变化
-     * @param string $dataId
-     * @param string $group
-     * @param string $content
+     * @param string $dataId 唯一标识符
+     * @param string $group 所属分组
+     * @param string $content 本地配置内容
      * @return array
      * @throws GuzzleException
      */
@@ -134,9 +152,9 @@ class Client
 
     /**
      * 读取配置
-     * @param string $dataId
-     * @param string $group
-     * @param string $tenant
+     * @param string $dataId 唯一标识符
+     * @param string $group 所属分组
+     * @param string $tenant 命名空间id
      * @return array
      */
     public function getConfig(string $dataId, string $group, string $tenant = 'public')
@@ -150,8 +168,8 @@ class Client
 
     /**
      * 删除配置
-     * @param string $dataId
-     * @param string $group
+     * @param string $dataId 唯一标识符
+     * @param string $group 所属分组
      * @return array
      */
     public function deleteConfig(string $dataId, string $group)
@@ -244,15 +262,15 @@ class Client
         }
 
         // 使用GET请求并确保参数作为URL参数传递
-        return $this->request('get', '/nacos/v1/ns/instance/list', $data, true);
+        return $this->request('get', '/nacos/v1/ns/instance/list', $data);
     }
 
     /**
      * 实例详情
      * @param string $serviceName 服务名称
-     * @param bool $healthyOnly 只返回健康实例
-     * @param string $ip
-     * @param string $port
+     * @param bool $healthyOnly 是否只返回健康实例
+     * @param string $ip 实例ip
+     * @param string $port 实例端口
      * @return array
      */
     public function getInstanceDetail(string $serviceName, bool $healthyOnly, string $ip, string $port)
@@ -264,12 +282,13 @@ class Client
 
     /**
      * 更新实例健康状态（Nacos v1 版本）
-     * @param string $serviceName
-     * @param string $namespaceId
-     * @param string $ip
-     * @param string $port
-     * @param bool $healthy
+     * @param string $serviceName 服务名称
+     * @param string $namespaceId 命名空间
+     * @param string $ip 实例ip
+     * @param string $port 实例端口
+     * @param bool $healthy 是否健康
      * @return array
+     * @note 永久实例可以通过本接口更新健康状态，临时实例只能通过心跳实现更新健康状态
      */
     public function updateInstanceHealthy(
         string $serviceName,
@@ -290,9 +309,9 @@ class Client
 
     /**
      * 创建服务
-     * @param string $serviceName
-     * @param string $namespaceId
-     * @param string $metadata
+     * @param string $serviceName 服务名称
+     * @param string $namespaceId 命名空间
+     * @param string $metadata 元数据
      * @return array
      */
     public function createService(string $serviceName, string $namespaceId, string $metadata = '')
@@ -308,8 +327,8 @@ class Client
 
     /**
      * 服务详情
-     * @param string $serviceName
-     * @param string $namespace
+     * @param string $serviceName 服务名称
+     * @param string $namespace 命名空间
      * @return array
      */
     public function getServiceDetail(string $serviceName, string $namespace)
@@ -329,9 +348,9 @@ class Client
 
     /**
      * 获取服务列表
-     * @param string $namespaceId
-     * @param int $page
-     * @param int $size
+     * @param string $namespaceId 命名空间
+     * @param int $page 当前页
+     * @param int $size 每页条数
      * @return array
      */
     public function getServiceList(string $namespaceId = null, int $page = 1, int $size = 10)
@@ -391,8 +410,8 @@ class Client
 
     /**
      * 移除服务
-     * @param string $serviceName
-     * @param string $namespaceId
+     * @param string $serviceName 服务名称
+     * @param string $namespaceId 命名空间
      * @return array
      */
     public function removeService(string $serviceName, string $namespaceId)
@@ -404,10 +423,10 @@ class Client
 
     /**
      * 删除实例
-     * @param string $serviceName
-     * @param string $ip
-     * @param string $port
-     * @param string $namespaceId
+     * @param string $serviceName 服务名称
+     * @param string $ip 实例ip
+     * @param string $port 实例端口
+     * @param string $namespaceId 实例命名空间
      * @return array
      */
     public function removeInstance(string $serviceName, string $ip, string $port, string $namespaceId, string $ephemeral)
@@ -425,12 +444,12 @@ class Client
 
     /**
      * 更新实例权重（Nacos 1.0 版本兼容，支持保留元数据）
-     * @param string $serviceName
-     * @param string $namespaceId
-     * @param string $ip
-     * @param string $port
-     * @param float $weight
-     * @param bool $ephemeral
+     * @param string $serviceName 服务名
+     * @param string $namespaceId 命名空间
+     * @param string $ip 实例ip
+     * @param string $port 实例端口
+     * @param float $weight 权重
+     * @param bool $ephemeral 是否永久实例
      * @param array|null $metadata 实例元数据（新增参数）
      * @return array
      */

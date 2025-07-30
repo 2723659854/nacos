@@ -8,7 +8,8 @@ $group       = 'api';
 $serviceName = 'father';
 $namespace   = 'public';
 
-$client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
+$client      = new \Xiaosongshu\Nacos\Client('http://192.168.110.72:8848','nacos','nacos');
+
 //var_dump("发布配置");
 ///** 发布配置 */
 //print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
@@ -27,7 +28,7 @@ $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','na
 var_dump("给服务分配一个实例，否则服务是空的，相当于餐馆没有厨师提供服务,这里有一个坑，如果是创建临时实例，则不要创建服务，直接创建实例并指定为临时实例，否则会默认为永久实例而发生冲突");
 /** 创建实例 */
 print_r($client->createInstance($serviceName, "192.168.4.110", '9506', $namespace, ['name' => 'tom', 'age' => 15], 50, 1, true));
-
+exit;
 //var_dump("获取服务列表，查看nacos上已注册了哪些服务");
 ///** 获取服务列表 */
 //print_r($client->getServiceList($namespace));
