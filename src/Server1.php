@@ -17,7 +17,7 @@ use ReflectionMethod;
  * @author yanglong
  * @time 2025年7月26日
  */
-class Server
+class Server1
 {
     /** 配置参数 */
     private $config;
@@ -64,10 +64,8 @@ class Server
     const ERROR_INVALID_PARAMS = ['code' => -32602, 'message' => '参数无效（类型或必填项错误）'];
     const ERROR_INTERNAL = ['code' => -32603, 'message' => '服务端内部错误'];
 
-    /** 需要监听的配置及流管理 */
+    /** 需要监听的配置 */
     private $configListen = [];
-    private $configStreams = []; // 配置监听流（streamId => 流信息）
-    private $configStreamMap = []; // 配置名到流的映射（configName => stream）
 
     /**
      * 构造函数：初始化配置与组件
@@ -85,195 +83,7 @@ class Server
     }
 
     /**
-     * 处理配置监听流的响应
-     * @param resource $stream 监听流
-     * @param string $name 配置名称
-     */
-    private function processConfigResponse($stream, string $name)
-    {
-        $streamId = (int)$stream;
-        try {
-            $config = $this->configListen[$name];
-            $response = stream_get_contents($stream);
-
-            // 解析HTTP状态码
-            $meta = stream_get_meta_data($stream);
-            $httpStatus = 200;
-            foreach ($meta['wrapper_data'] as $header) {
-                if (strpos($header, 'HTTP/') === 0) {
-                    preg_match('/HTTP\/\d+\.\d+ (\d+)/', $header, $matches);
-                    $httpStatus = (int)$matches[1];
-                    break;
-                }
-            }
-
-            // 处理认证错误（401/403）：刷新token
-            if (in_array($httpStatus, [401, 403])) {
-                echo "[config] {$name} 认证失败（{$httpStatus}），刷新token...\n";
-                $this->nacosClient->login(); // 强制重新登录
-                $this->configListen[$name]['retry'] = time() + 2;
-                return;
-            }
-
-            // 处理参数错误（400）：输出错误详情并重试
-            if ($httpStatus == 400) {
-                echo "[config] {$name} 请求参数错误（400），响应：{$response}\n";
-                $this->configListen[$name]['retry'] = time() + 3;
-                return;
-            }
-
-            // 配置变化（响应非空）
-            if ($httpStatus == 200 && !empty(trim($response))) {
-                echo "[config] {$name} 配置发生变化\n";
-                $configFromNacos = $this->nacosClient->getConfig(
-                    $config['dataId'],
-                    $config['group'],
-                    $config['tenant'] ?? 'public'
-                );
-
-                if ($configFromNacos['code'] == 200) {
-                    $content = $configFromNacos['content'];
-                    $this->configListen[$name]['content'] = $content;
-
-                    // 执行回调和本地更新
-                    if ($config['callback'] && is_callable($config['callback'])) {
-                        call_user_func($config['callback'], $content);
-                    }
-                    file_put_contents($config['file'], $content);
-                }
-            } else {
-                // 配置未变化（正常情况）
-                echo "[config] {$name} 配置未变化\n";
-            }
-        } catch (Exception $e) {
-            echo "[config] {$name} 处理异常：{$e->getMessage()}\n";
-            $this->configListen[$name]['retry'] = time() + 3;
-        } finally {
-            // 无论是否发生异常，强制关闭流并移除记录
-            if (is_resource($stream)) {
-                fclose($stream);
-            }
-            if (isset($this->configStreams[$streamId])) {
-                unset($this->configStreams[$streamId]);
-            }
-            if (isset($this->configStreamMap[$name])) {
-                unset($this->configStreamMap[$name]);
-            }
-        }
-
-        // 正常重试监听（在finally外，确保清理后再创建新流）
-        $this->startConfigListenStream($name);
-    }
-
-    /**
-     * 启动配置监听流（创建非阻塞HTTP流，调整为10秒间隔监听）
-     * @param string $name 配置名称
-     */
-    private function startConfigListenStream(string $name)
-    {
-        // 关键：创建新流前，先清理该配置的旧流
-        if (isset($this->configStreamMap[$name])) {
-            $oldStream = $this->configStreamMap[$name];
-            $oldStreamId = (int)$oldStream;
-            if (is_resource($oldStream)) {
-                fclose($oldStream);
-            }
-            unset($this->configStreams[$oldStreamId], $this->configStreamMap[$name]);
-            echo "[配置监听] 清理旧流：{$name}（ID: {$oldStreamId}）\n";
-        }
-
-        $config = $this->configListen[$name];
-        $url = rtrim($this->serverConfig['host'], '/') . '/nacos/v1/cs/configs/listener';
-
-        // 获取最新token
-        $token = $this->nacosClient->getToken();
-        $listeningConfig = implode(self::WORD_SEPARATOR, [
-                $config['dataId'],
-                $config['group'],
-                md5($config['content'])
-            ]) . self::LINE_SEPARATOR;
-
-        // 10秒超时配置（核心修改）
-        $serverTimeout = 10000; // 服务器长轮询超时（10秒）
-        $clientTimeout = 11;    // 客户端超时（略长于服务器，避免提前断开）
-
-        // 正确的参数：使用Listening-Configs，设置10秒超时
-        $params = http_build_query([
-            'Listening-Configs' => $listeningConfig,
-            'tenant' => $config['tenant'] ?? 'public',
-            'timeout' => $serverTimeout, // 服务器超时参数
-            'accessToken' => $token
-        ]);
-
-        // 流上下文：添加长轮询超时头，客户端超时设为11秒
-        $context = stream_context_create([
-            'http' => [
-                'method' => 'POST',
-                'header' => implode("\r\n", [
-                    'Content-Type: application/x-www-form-urlencoded',
-                    'Long-Pulling-Timeout: ' . $serverTimeout // 告知服务器长轮询超时时间
-                ]),
-                'content' => $params,
-                'timeout' => $clientTimeout, // 客户端超时（秒）
-                'ignore_errors' => true
-            ]
-        ]);
-
-        // 打开流
-        $stream = fopen($url, 'r', false, $context);
-        if (!$stream) {
-            echo "[配置监听] 流创建失败：{$name}，3秒后重试...\n";
-            $this->configListen[$name]['retry'] = time() + 3;
-            return;
-        }
-
-        stream_set_blocking($stream, 0);
-        $streamId = (int)$stream;
-
-        $this->configStreams[$streamId] = [
-            'stream' => $stream,
-            'name' => $name,
-            'startTime' => time()
-        ];
-        $this->configStreamMap[$name] = $stream;
-
-        echo "[配置监听] 启动流：{$name}（ID: {$streamId}，10秒超时监听）\n";
-    }
-
-    /**
-     * 重试失败的配置监听流
-     */
-    private function retryFailedConfigStreams()
-    {
-        $now = time();
-        foreach ($this->configListen as $name => $config) {
-            if (empty($config['enable']) || !isset($config['retry']) || $config['retry'] > $now) {
-                continue;
-            }
-
-            // 检查是否已有活跃流（严格判断资源有效性）
-            $hasActiveStream = false;
-            if (isset($this->configStreamMap[$name])) {
-                $stream = $this->configStreamMap[$name];
-                if (is_resource($stream) && get_resource_type($stream) === 'stream') {
-                    $hasActiveStream = true;
-                }
-            }
-
-            if ($hasActiveStream) {
-                unset($this->configListen[$name]['retry']);
-                continue;
-            }
-
-            // 重试创建流
-            $this->startConfigListenStream($name);
-            unset($this->configListen[$name]['retry']);
-        }
-    }
-
-
-    /**
-     * 读取需要监听的配置并初始化监听流
+     * 读取需要监听的配置
      * @return void
      */
     private function initConfigListen()
@@ -287,20 +97,8 @@ class Server
                 $this->configListen[$name]['content'] = "";
                 echo "[初始化] 已加载配置：{$name} -> {$config['file']}（配置文件不存在）\n";
             }
-
-            // 启动配置监听流（非阻塞）
-            if (!empty($config['enable'])) {
-                $this->startConfigListenStream($name);
-            }
         }
     }
-
-    /** 分隔符 */
-    public const WORD_SEPARATOR = "\x02";
-    /** 结束 */
-    public const LINE_SEPARATOR = "\x01";
-
-
 
     /**
      * 验证配置合法性
@@ -322,6 +120,7 @@ class Server
                 break;
             }
         }
+
 
         $hasEnabledConfig = false;
         foreach ($this->config['config'] ?? [] as $name => $config) {
@@ -591,13 +390,50 @@ class Server
                 $lastCheckTime = $now;
             }
 
-            // 处理配置监听流重试
-            $this->retryFailedConfigStreams();
-
-            // 处理TCP请求和配置监听流（统一IO多路复用）
+            // 处理TCP请求
             $this->handleTcpRequests();
 
+            // 每隔10秒监听一次nacos服务器上的配置
+            if (time() % 30 == 0) {
+                $this->listenConfigFromNacos();
+            }
             usleep(10000);
+        }
+    }
+
+    /**
+     * 从服务器上监听配置变化并更新本地配置文件
+     * @return void
+     * @note 这个配置监听是阻塞的，
+     */
+    public function listenConfigFromNacos()
+    {
+        foreach ($this->configListen as $name => $config) {
+            if (empty($config['enable'])) {
+                continue;
+            }
+            # 监听服务器上的配置
+            $search = $this->nacosClient->listenerConfig($config['dataId'], $config['group'], $config['content']);
+            if ($search['code'] == 200 && $search['content']){
+                echo "[config] 监听{$name} 已变化\n";
+                $configFromNacos = $this->nacosClient->getConfig($config['dataId'], $config['group'],'public');
+                if ($configFromNacos['code'] == 200) {
+                    $content = $configFromNacos['content'];
+                    $this->configListen[$name]['content'] = $content;
+                    if ($config['callback']&& is_callable($config['callback'])) {
+                        try{
+                            call_user_func($config['callback'], $content);
+                            echo "[config] 更新{$name} 配置成功\n";
+                        }catch (\Exception $e){
+                            echo "[config] 更新{$name} 配置失败\n";
+                        }
+                    }
+                }else{
+                    echo "[config] 读取{$name} 配置失败\n";
+                }
+            }else{
+                echo "[config] 监听{$name} 配置没有变化\n";
+            }
         }
     }
 
@@ -634,64 +470,26 @@ class Server
     }
 
     /**
-     * 处理TCP请求和配置监听流（分离Socket和流的处理，优化超时避免阻塞）
+     * 处理TCP请求
      * @return void
      */
     private function handleTcpRequests()
     {
-        // 1. 分离Socket资源和流资源
-        $socketRead = [$this->serverSocket]; // Socket资源（TCP服务器+客户端）
-        $streamRead = []; // 流资源（配置监听）
+        $read = [$this->serverSocket];
+        $write = [];
+        $except = [];
 
-        // 添加客户端Socket
-        foreach ($this->clients as $clientSocket) {
-            $socketRead[] = $clientSocket;
-        }
-
-        // 添加配置监听流
-        foreach ($this->configStreams as $info) {
-            $streamRead[] = $info['stream'];
-        }
-
-        $socketWrite = [];
-        $socketExcept = [];
-        $streamWrite = [];
-        $streamExcept = [];
-
-        // 收集可写客户端Socket
         foreach ($this->clients as $clientSocket) {
             $clientId = (int)$clientSocket;
+            $read[] = $clientSocket;
             if (!empty($this->writeBuffers[$clientId])) {
-                $socketWrite[] = $clientSocket;
+                $write[] = $clientSocket;
             }
+            $except[] = $clientSocket;
         }
 
-        // 2. 同时等待Socket和流的事件（超时缩短为0.1秒，避免阻塞心跳）
-        $socketActivity = false;
-        $streamActivity = false;
-
-        // 复制数组（select会修改原数组，需传引用）
-        $socketReadCopy = $socketRead;
-        $socketWriteCopy = $socketWrite;
-        $socketExceptCopy = $socketExcept;
-        $streamReadCopy = $streamRead;
-        $streamWriteCopy = $streamWrite;
-        $streamExceptCopy = $streamExcept;
-
-        // 处理Socket事件：超时设为0.1秒（100毫秒）
-        if (!empty($socketReadCopy) || !empty($socketWriteCopy) || !empty($socketExceptCopy)) {
-            // 参数：秒=0，微秒=100000（合计0.1秒）
-            $socketActivity = \socket_select($socketReadCopy, $socketWriteCopy, $socketExceptCopy, 0, 100000);
-        }
-
-        // 处理流事件：超时设为0.1秒（100毫秒）
-        if (!empty($streamReadCopy) || !empty($streamWriteCopy) || !empty($streamExceptCopy)) {
-            // stream_select的超时参数格式为 秒 + 微秒/1000000
-            $streamActivity = stream_select($streamReadCopy, $streamWriteCopy, $streamExceptCopy, 0, 100000);
-        }
-
-        // 处理select错误（忽略中断错误）
-        if ($socketActivity === false && $streamActivity === false) {
+        $activity = \socket_select($read, $write, $except, 1);
+        if ($activity === false) {
             $errorCode = \socket_last_error();
             if ($errorCode != \SOCKET_EINTR) {
                 echo "[TCP] select错误：" . \socket_strerror($errorCode) . "\n";
@@ -699,56 +497,29 @@ class Server
             return;
         }
 
-        // 3. 处理Socket异常
-        foreach ($socketExceptCopy as $socket) {
+        // 处理异常连接
+        foreach ($except as $socket) {
             $clientId = (int)$socket;
             $clientAddr = $this->clientAddresses[$clientId] ?? "未知";
             echo "[TCP] 客户端异常（{$clientAddr}），关闭连接\n";
             $this->closeClient($socket);
         }
 
-        // 4. 处理流异常
-        foreach ($streamExceptCopy as $stream) {
-            $streamId = (int)$stream;
-            if (isset($this->configStreams[$streamId])) {
-                $info = $this->configStreams[$streamId];
-                echo "[config] 流异常（{$info['name']}）\n";
-                fclose($stream);
-                unset($this->configStreams[$streamId], $this->configStreamMap[$info['name']]);
-                $this->configListen[$info['name']]['retry'] = time() + 3;
-            }
-        }
-
-        // 5. 处理新TCP连接
-        if (in_array($this->serverSocket, $socketReadCopy)) {
+        // 处理新连接
+        if (in_array($this->serverSocket, $read)) {
             $this->handleNewConnection();
         }
 
-        // 6. 处理Socket可读事件（TCP客户端）
-        foreach ($socketReadCopy as $socket) {
+        // 处理客户端请求
+        foreach ($read as $socket) {
             if ($socket === $this->serverSocket) {
-                continue; // 已处理新连接
+                continue;
             }
             $this->handleClientRequest($socket);
         }
 
-        // 7. 处理流可读事件（配置监听）
-        foreach ($streamReadCopy as $stream) {
-            $streamId = (int)$stream;
-            if (isset($this->configStreams[$streamId])) {
-                $info = $this->configStreams[$streamId];
-                $name = $info['name'];
-
-                // 处理配置响应（内部已关闭流并清理记录）
-                $this->processConfigResponse($stream, $name);
-
-                // 直接启动新流（无需重复关闭和清理）
-                $this->startConfigListenStream($name);
-            }
-        }
-
-        // 8. 发送TCP响应
-        foreach ($socketWriteCopy as $socket) {
+        // 发送响应
+        foreach ($write as $socket) {
             $this->sendClientResponse($socket);
         }
     }
@@ -1005,12 +776,6 @@ class Server
     {
         echo "\n[退出] 开始清理资源...\n";
 
-        // 关闭配置监听流
-        foreach ($this->configStreams as $info) {
-            fclose($info['stream']);
-        }
-
-        // 注销服务实例
         foreach ($this->enabledServices as $service) {
             $this->nacosClient->removeInstance(
                 $service['nacosServiceName'],
@@ -1022,12 +787,10 @@ class Server
             echo "[退出] 已注销服务：{$service['serviceKey']}\n";
         }
 
-        // 关闭客户端连接
         foreach ($this->clients as $socket) {
             \socket_close($socket);
         }
 
-        // 关闭TCP服务
         if ($this->serverSocket) {
             \socket_close($this->serverSocket);
         }

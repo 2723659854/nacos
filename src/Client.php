@@ -74,6 +74,12 @@ class Client
         }
     }
 
+    public function getToken()
+    {
+        $this->checkToken();
+        return $this->token;
+    }
+
     /**
      * 公共请求方法（自动处理token过期）
      * @param string $method 请求方法
