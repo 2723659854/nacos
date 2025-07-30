@@ -74,6 +74,11 @@ class Client
         }
     }
 
+    /**
+     * 获取当前客户端token
+     * @return string
+     * @throws \Exception
+     */
     public function getToken()
     {
         $this->checkToken();

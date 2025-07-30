@@ -2,9 +2,9 @@
 
 namespace Xiaosongshu\Nacos;
 
-use Exception;
-use ReflectionClass;
-use ReflectionMethod;
+use \Exception;
+use \ReflectionClass;
+use \ReflectionMethod;
 
 /**
  * 微服务服务端（支持元数据自动上报、服务降级与熔断）
@@ -13,6 +13,7 @@ use ReflectionMethod;
  * 2. 基于超时率的服务降级（动态调整权重）
  * 3. 基于错误率的服务熔断（通过控制心跳实现）
  * 4. 每个服务独立统计与调整逻辑
+ * 5. 支持配置监听
  * @purpose 微服务服务端
  * @author yanglong
  * @time 2025年7月26日
@@ -75,6 +76,11 @@ class Server
     public const WORD_SEPARATOR = "\x02";
     public const LINE_SEPARATOR = "\x01";
 
+    /**
+     * 初始化
+     * @param array $config 服务端相关配置
+     * @throws Exception
+     */
     public function __construct(array $config)
     {
         $this->config = $config;
@@ -86,104 +92,19 @@ class Server
     }
 
     /**
-     * 处理配置监听响应（非阻塞方式）
-     */
-    private function processConfigResponse($socket, string $name)
-    {
-        $streamId = (int)$socket;
-        try {
-            $config = $this->configListen[$name];
-
-            // 读取响应数据（非阻塞方式）
-            $response = stream_get_contents($socket);
-            if ($response === false) {
-                throw new Exception("读取响应失败");
-            }
-
-            // 解析HTTP状态码
-            $headerEndPos = strpos($response, "\r\n\r\n");
-            if ($headerEndPos === false) {
-                throw new Exception("无效的HTTP响应格式");
-            }
-
-            $headers = explode("\r\n", substr($response, 0, $headerEndPos));
-            $httpStatus = 200;
-            foreach ($headers as $header) {
-                if (preg_match('/^HTTP\/\d\.\d (\d+)/', $header, $matches)) {
-                    $httpStatus = (int)$matches[1];
-                    break;
-                }
-            }
-
-            // 处理认证和参数错误
-            if (in_array($httpStatus, [401, 403])) {
-                $now = date('Y-m-d H:i:s');
-                echo "[config] {$name} 认证失败（{$httpStatus}），刷新token...{$now}\n";
-                $this->nacosClient->getToken();
-                $this->configListen[$name]['retry'] = time() + 2;
-                return;
-            }
-
-            if ($httpStatus == 400) {
-                $body = substr($response, $headerEndPos + 4);
-                $now = date('Y-m-d H:i:s');
-                echo "[config] {$name} 请求参数错误（400），响应：{$body} {$now}\n";
-                $this->configListen[$name]['retry'] = time() + 3;
-                return;
-            }
-
-            // 获取响应体
-            $body = substr($response, $headerEndPos + 4);
-
-            // 关键修改：Nacos配置变化时会返回dataId，空响应表示超时
-            if ($httpStatus == 200 && trim($body) !== '') {
-                // 提取变化的dataId
-                $changedDataId = trim($body);
-                if ($changedDataId === $config['dataId']) {
-                    $now = date('Y-m-d H:i:s');
-                    echo "[config] {$name} 配置发生变化 {$now}\n";
-                    $configFromNacos = $this->nacosClient->getConfig(
-                        $config['dataId'],
-                        $config['group'],
-                        $config['tenant'] ?? 'public'
-                    );
-
-                    if ($configFromNacos['code'] == 200) {
-                        $content = $configFromNacos['content'];
-                        if ($content !== $this->configListen[$name]['content']) {
-                            $this->configListen[$name]['content'] = $content;
-
-                            if ($config['callback'] && is_callable($config['callback'])) {
-                                call_user_func($config['callback'], $content);
-                            }
-                            file_put_contents($config['file'], $content);
-                        }
-                    }
-                }
-            } else {
-                $now = date('Y-m-d H:i:s');
-                echo "[config] {$name} 配置未变化（长轮询超时）{$now}\n";
-            }
-        } catch (Exception $e) {
-            $now = date('Y-m-d H:i:s');
-            echo "[config] {$name} 处理异常：{$e->getMessage()} {$now}\n";
-            $this->configListen[$name]['retry'] = time() + 3;
-        } finally {
-            if (is_resource($socket)) {
-                fclose($socket);
-            }
-            unset($this->configStreams[$streamId], $this->configStreamMap[$name]);
-        }
-
-        // 立即重新建立监听（不要延迟）
-        $this->startConfigListenStream($name);
-    }
-
-    /**
-     * 启动非阻塞配置监听流
+     * 启动非阻塞配置监听流（添加重复检查）
      */
     private function startConfigListenStream(string $name)
     {
+        // 关键修复：如果已有相同名称的监听流在运行，则不创建新流
+        if (isset($this->configStreamMap[$name])) {
+            $existingSocket = $this->configStreamMap[$name];
+            if (is_resource($existingSocket) && !feof($existingSocket)) {
+                echo "[配置监听] 已存在监听流：{$name}（ID: " . (int)$existingSocket . "），无需重复创建\n";
+                return;
+            }
+        }
+
         // 清理旧流
         if (isset($this->configStreamMap[$name])) {
             $oldSocket = $this->configStreamMap[$name];
@@ -196,7 +117,7 @@ class Server
         $config = $this->configListen[$name];
         $urlParts = parse_url($this->serverConfig['host']);
         $host = $urlParts['host'];
-        $port = $urlParts['port'] ?? ($urlParts['scheme'] === 'https' ? 443 : 80);
+        $port = $urlParts['port'] ?? 80; // 仅使用HTTP
         $path = '/nacos/v1/cs/configs/listener';
 
         // 构建监听配置
@@ -214,20 +135,15 @@ class Server
             'accessToken' => $token
         ]);
 
-        // 创建非阻塞socket
-        $context = stream_context_create([
-            'ssl' => [
-                'verify_peer' => false,
-                'verify_peer_name' => false
-            ]
-        ]);
+        // 创建非阻塞socket（仅HTTP）
+        $context = \stream_context_create();
 
-        $socket = stream_socket_client(
+        $socket = \stream_socket_client(
             "tcp://{$host}:{$port}",
             $errno,
             $errstr,
             0,
-            STREAM_CLIENT_ASYNC_CONNECT,
+            \STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );
 
@@ -237,15 +153,15 @@ class Server
             return;
         }
 
-        stream_set_blocking($socket, false);
+        \stream_set_blocking($socket, false);
 
         // 构造HTTP请求
         $request = "POST {$path} HTTP/1.1\r\n";
         $request .= "Host: {$host}\r\n";
         $request .= "Content-Type: application/x-www-form-urlencoded\r\n";
         $request .= "Content-Length: " . strlen($params) . "\r\n";
-        $request .= "Long-Pulling-Timeout: 30000\r\n"; // 关键：必须添加此头
-        $request .= "Connection: keep-alive\r\n\r\n";
+        $request .= "Long-Pulling-Timeout: 30000\r\n";
+        $request .= "Connection: close\r\n\r\n"; // 每次请求后关闭连接
         $request .= $params;
 
         // 发送请求
@@ -263,25 +179,235 @@ class Server
         echo "[配置监听] 启动监听流：{$name}（ID: {$streamId}） {$now}\n";
     }
 
+    /**
+     * 处理配置监听响应（修复单次监测后停止的问题）
+     */
+    private function processConfigResponse($socket, string $name)
+    {
+        $streamId = (int)$socket;
+        $configChanged = false; // 标记是否发生了配置变更
+
+        try {
+            $config = $this->configListen[$name];
+            $responseData = '';
+
+            // 读取响应数据
+            while (!feof($socket)) {
+                $buffer = fread($socket, 4096);
+                if ($buffer === false) {
+                    break;
+                }
+                $responseData .= $buffer;
+            }
+
+            if (empty($responseData)) {
+                $now = date('Y-m-d H:i:s');
+                echo "[config] {$name} 长轮询超时（无数据） {$now}\n";
+                return;
+            }
+
+            // 解析HTTP头
+            $headerEndPos = strpos($responseData, "\r\n\r\n");
+            if ($headerEndPos === false) {
+                if (strpos($responseData, "HTTP/1.1 200 OK") !== false) {
+                    $now = date('Y-m-d H:i:s');
+                    echo "[config] {$name} 配置未变化（超时） {$now}\n";
+                    return;
+                }
+                throw new \Exception("无效的HTTP响应格式");
+            }
+
+            // 解析状态码
+            $headers = explode("\r\n", substr($responseData, 0, $headerEndPos));
+            $httpStatus = 200;
+            foreach ($headers as $header) {
+                if (preg_match('/^HTTP\/\d\.\d (\d+)/', $header, $matches)) {
+                    $httpStatus = (int)$matches[1];
+                    break;
+                }
+            }
+
+            // 处理错误状态码
+            if (in_array($httpStatus, [401, 403])) {
+                $now = date('Y-m-d H:i:s');
+                echo "[config] {$name} 认证失败（{$httpStatus}），刷新token...{$now}\n";
+                $this->nacosClient->getToken(true);
+                $this->configListen[$name]['retry'] = time() + 2;
+                return;
+            }
+
+            if ($httpStatus == 400) {
+                $body = $this->parseHttpBody($responseData, $headerEndPos, $headers);
+                $now = date('Y-m-d H:i:s');
+                echo "[config] {$name} 请求参数错误（400）：{$body} {$now}\n";
+                $this->configListen[$name]['retry'] = time() + 3;
+                return;
+            }
+
+            // 获取并处理响应体
+            $body = $this->parseHttpBody($responseData, $headerEndPos, $headers);
+            $body = trim($body);
+
+            $now = date('Y-m-d H:i:s');
+            if ($httpStatus == 200 && !empty($body)) {
+                // 解码URL编码的响应
+                $decodedBody = urldecode($body);
+                echo "[调试] 原始响应: {$body} | 解码后: {$decodedBody} | 监听配置: dataId={$config['dataId']}, group={$config['group']} {$now}\n";
+
+                // 分割变更条目
+                $changeEntries = explode(self::LINE_SEPARATOR, $decodedBody);
+                foreach ($changeEntries as $entry) {
+                    $entry = trim($entry);
+                    if (empty($entry)) {
+                        continue;
+                    }
+
+                    // 使用Nacos标准分隔符分割（\x02）
+                    $parts = explode("\x02", $entry);
+                    $changedDataId = $parts[0] ?? '';
+                    $changedGroup = $parts[1] ?? '';
+
+                    // 标准化group（默认值处理）
+                    $normalizedConfigGroup = empty($config['group']) ? 'default' : $config['group'];
+                    $normalizedChangedGroup = empty($changedGroup) ? 'default' : $changedGroup;
+
+                    // 精确匹配dataId和group
+                    if ($changedDataId === $config['dataId'] && $normalizedChangedGroup === $normalizedConfigGroup) {
+                        echo "[config] {$name} 配置发生变化（dataId: {$changedDataId}, group: {$changedGroup}） {$now}\n";
+                        $configChanged = true; // 标记发生了配置变更
+
+                        // 获取最新配置
+                        $configFromNacos = $this->nacosClient->getConfig(
+                            $config['dataId'],
+                            $normalizedConfigGroup,
+                            $config['tenant'] ?? 'public'
+                        );
+
+                        if ($configFromNacos['code'] == 200) {
+                            $content = $configFromNacos['content'];
+                            if ($content !== $this->configListen[$name]['content']) {
+                                $this->configListen[$name]['content'] = $content;
+
+                                if ($config['callback'] && is_callable($config['callback'])) {
+                                    call_user_func($config['callback'], $content);
+                                }
+                                file_put_contents($config['file'], $content);
+                            }
+                        }
+                        break; // 处理完匹配的变更后跳出循环
+                    }
+                }
+
+                // 未匹配到的详细日志
+                if (!$configChanged) {
+                    echo "[config] 未匹配变更 - 监听(dataId:{$config['dataId']})，收到:{$decodedBody} {$now}\n";
+                }
+            } else {
+                echo "[config] {$name} 配置未变化（长轮询超时）{$now}\n";
+            }
+        } catch (Exception $e) {
+            $now = date('Y-m-d H:i:s');
+            echo "[config] {$name} 处理异常：{$e->getMessage()} {$now}\n";
+            $this->configListen[$name]['retry'] = time() + 3;
+        } finally {
+            if (is_resource($socket)) {
+                fclose($socket);
+            }
+            unset($this->configStreams[$streamId], $this->configStreamMap[$name]);
+        }
+
+        // 无论是否发生配置变更，都重建监听流
+        $retryDelay = $this->configListen[$name]['retryDelay'] ?? 1;
+        // 配置变更后使用稍长延迟
+        if ($configChanged) {
+            $retryDelay = 2;
+        }
+        usleep($retryDelay * 1000000);
+
+        // 强制启动新的监听流
+        $this->startConfigListenStream($name);
+    }
+
 
     /**
-     * 重试失败的配置监听流
+     * 重试失败的配置监听流（加强频率控制）
      */
     private function retryFailedConfigStreams()
     {
         $now = time();
+        $maxRetriesPerLoop = 1; // 每次事件循环最多重试1个
+        $retryCount = 0;
+        $minRetryInterval = 5; // 最小重试间隔（秒）
+
         foreach ($this->configListen as $name => $config) {
-            // 检查是否满足重试条件
+            // 检查是否需要重试
             if (empty($config['enable']) ||
-                (!isset($config['retry']) || $config['retry'] > $now) ||
+                !isset($config['retry']) ||
+                $config['retry'] > $now ||
                 isset($this->configStreamMap[$name])) {
                 continue;
             }
 
+            // 检查是否过于频繁
+            $lastRetry = $config['lastRetry'] ?? 0;
+            if ($now - $lastRetry < $minRetryInterval) {
+                continue;
+            }
+
+            // 限制重试次数
+            if ($retryCount >= $maxRetriesPerLoop) {
+                break;
+            }
+
+            $this->configListen[$name]['lastRetry'] = $now;
             $this->startConfigListenStream($name);
             unset($this->configListen[$name]['retry']);
+            $retryCount++;
         }
     }
+
+    /**
+     * 解析HTTP响应体（处理分块编码）
+     */
+    private function parseHttpBody($responseData, $headerEndPos, $headers)
+    {
+        $body = substr($responseData, $headerEndPos + 4);
+        $transferEncoding = '';
+
+        // 查找传输编码方式
+        foreach ($headers as $header) {
+            if (stripos($header, 'Transfer-Encoding:') === 0) {
+                $transferEncoding = trim(str_replace('Transfer-Encoding:', '', $header));
+                break;
+            }
+        }
+
+        // 处理分块编码
+        if ($transferEncoding === 'chunked') {
+            $decodedBody = '';
+            $offset = 0;
+            $bodyLength = strlen($body);
+
+            while ($offset < $bodyLength) {
+                $chunkSizeEnd = strpos($body, "\r\n", $offset);
+                if ($chunkSizeEnd === false) break;
+
+                $chunkSizeHex = substr($body, $offset, $chunkSizeEnd - $offset);
+                $chunkSize = hexdec($chunkSizeHex);
+                if ($chunkSize === 0) break;
+
+                $offset = $chunkSizeEnd + 2;
+                $decodedBody .= substr($body, $offset, $chunkSize);
+                $offset += $chunkSize + 2;
+            }
+
+            return $decodedBody;
+        }
+
+        return $body;
+    }
+
+
 
     /**
      * 初始化配置监听
@@ -394,9 +520,6 @@ class Server
             $this->sendClientResponse($socket);
         }
     }
-
-
-
 
 
     /**

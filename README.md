@@ -28,7 +28,7 @@ var_dump("获取配置需要稍等一秒左右，否则是404");
 /** 获取配置 */
 print_r($client->getConfig($dataId, $group,'public'));
 
-var_dump("监听配置是否发生了变化，有变化则有返回值，无变化则返回空,同时监听配置会阻塞1秒左右");
+var_dump("监听配置是否发生了变化，有变化则有返回值，无变化则返回空,同时监听配置会阻塞几秒左右");
 /** 监听配置 */
 print_r($client->listenerConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
 
@@ -70,43 +70,8 @@ print_r($client->removeInstance($serviceName, '192.168.4.110', 9505, $namespace,
 
 ###  应用举例
 
-####  监听配置
-
-你可以编写一个listen.php文件，内容如下：
-```php
-<?php
-
-require_once __DIR__.'/vendor/autoload.php';
-
-$dataId      = 'CalculatorService';
-$group       = 'api';
-$serviceName = 'father';
-$namespace   = 'public';
-$client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
-var_dump("发布配置");
-/** 发布配置 */
-$client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha']));
-//todo 这个时候你可以手动到nacos服务器上修改一下配置，查看结果
-while (true){
-    sleep(1);
-    $listener = $client->listenerConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha']));
-    if ($listener['content']){
-        var_dump("配置发生了变化",$listener['content']);
-        $newConfigContent = $client->getConfig($dataId, $group,'public');
-        var_dump($newConfigContent);
-        //todo 将配置写入你的文件或者加载到内存即可
-    }else{
-        var_dump("配置没有变化");
-    }
-}
-
-
-```
-执行命令可以测试配置变化
-```bash
-php listen.php
-```
-####  注册发布服务
+####  注册发布服务，监听配置
+本项目提供已编写好的服务端`Xiaosongshu\Nacos\Server`和客户端`Xiaosongshu\Nacos\JsonRpcClient`。<br>
 你可以编写一个server.php文件，内容如下
 
 ```php
@@ -139,30 +104,33 @@ return [
 
     /** 连接服务器的基本配置 */
     'server'=>[
-        'host'=>'http://192.168.110.72:8848',
+        'host'=>'http://127.0.0.1:8848',
         'username'=>'nacos',
         'password'=>'nacos',
     ],
 
     /** 服务提供者实例的配置 */
     'instance'=>[
-        'ip'=>'192.168.110.72',
+        'ip'=>'127.0.0.1',
         'port'=>'8000',
-        'weight'=>99,
+        'weight'=>100,
     ],
 
-    /** 需要监听的配置 */
-    'config'=>[
-        'first'=>[
-            'enable'=>true,
-            'dataId'=>'default',
-            'group'=>'default',
-            'content'=> [
-                'username'=>'tom',
-                'password'=>'123456',
-                'age'=>25
-            ],
-        ]
+    /** 需要监听的配置 作为配置，你可能需要尽可能将配置合并到比较少的文件，一个项目一个配置文件最多两个配置文件就足够了。 */
+    'config' => [
+        'app' => [
+            # 是否开启监听
+            'enable' => true,
+            'dataId' => 'default',
+            'group' => 'default',
+            # 需要配监听的配置文件
+            'file' => __DIR__ . '/application.yaml',
+            # 监听到配置发生变化的回调
+            'callback' => function ($content) {
+                file_put_contents(__DIR__ . "/application.yaml", $content);
+                // todo 重新加载配置，刷新应用
+            }
+        ],
     ],
 
     /** 需要注册的服务 */
@@ -374,32 +342,48 @@ php client.php
 ```
 那么服务端测试结果大概效果是这样子的
 ```text
-PS D:\php\nacosServer> php .\server.php
+PS D:\php\nacosDemo> php .\server.php
 [初始化] 已加载服务：demo -> Xiaosongshu\Nacos\Samples\DemoService（元数据解析完成）
 [初始化] 已加载服务：login -> Xiaosongshu\Nacos\Samples\LoginService（元数据解析完成）
-[Nacos] 已注册服务：demo -> SERVICE@@demo（IP：192.168.110.72:8000）
-[Nacos] 已注册服务：login -> SERVICE@@login（IP：192.168.110.72:8000）
-[TCP服务] 已启动，监听：192.168.110.72:8000（JSON-RPC协议）
-[心跳] 成功（demo）=>Xiaosongshu\Nacos\Samples\DemoService（18:52:45）
-[心跳] 成功（login）=>Xiaosongshu\Nacos\Samples\LoginService（18:52:45）
-[TCP] 新客户端连接：192.168.110.72:50210（clientId：80）
-[TCP] 收到请求（192.168.110.72:50210）：{"jsonrpc":"2.0","method":"login.login","params":["zhangsan","123456"],"id":"rpc_688361ffce388"}
-[TCP] 发送响应（192.168.110.72:50210）：{"jsonrpc":"2.0","id":"rpc_688361ffce388","result":{"success":true,"message":"登录成功","token":"2d7b6bd23bd38d6051bf06a2d55c6eca","expire":3600}}
-[TCP] 新客户端连接：192.168.110.72:50211（clientId：81）
-[TCP] 客户端断开（192.168.110.72:50210）
-[TCP] 收到请求（192.168.110.72:50211）：{"jsonrpc":"2.0","method":"login.out","params":["2d7b6bd23bd38d6051bf06a2d55c6eca"],"id":"rpc_688361ffd588a"}
-[TCP] 发送响应（192.168.110.72:50211）：{"jsonrpc":"2.0","id":"rpc_688361ffd588a","result":{"success":true,"message":"退出登录成功","token":"2d7b6bd23bd38d6051bf06a2d55c6eca"}}
-[TCP] 新客户端连接：192.168.110.72:50212（clientId：82）
-[TCP] 客户端断开（192.168.110.72:50211）
-[TCP] 收到请求（192.168.110.72:50212）：{"jsonrpc":"2.0","method":"demo.add","params":["张三",20],"id":"rpc_688361ffe22fa"}
-[TCP] 发送响应（192.168.110.72:50212）：{"jsonrpc":"2.0","id":"rpc_688361ffe22fa","result":"用户添加成功！姓名：张三，年龄：20（服务端处理时间：18:52:47）"}
-[TCP] 新客户端连接：192.168.110.72:50213（clientId：83）
-[TCP] 客户端断开（192.168.110.72:50212）
-[TCP] 收到请求（192.168.110.72:50213）：{"jsonrpc":"2.0","method":"demo.get","params":["张三"],"id":"rpc_688361ffed00a"}
-[TCP] 发送响应（192.168.110.72:50213）：{"jsonrpc":"2.0","id":"rpc_688361ffed00a","result":{"name":"张三","age":25,"message":"查询成功（服务端时间：18:52:47）"}}
-[TCP] 客户端断开（192.168.110.72:50213）
-[心跳] 成功（demo）=>Xiaosongshu\Nacos\Samples\DemoService（18:52:50）
-[心跳] 成功（login）=>Xiaosongshu\Nacos\Samples\LoginService（18:52:50）
+[初始化] 已加载配置：app -> D:\php\nacosDemo/application.yaml
+[配置监听] 启动监听流：app（ID: 23） 2025-07-30 19:32:01
+[Nacos] 已注册服务：demo -> SERVICE@@demo（IP：127.0.0.1:8000）
+[Nacos] 已注册服务：login -> SERVICE@@login（IP：127.0.0.1:8000）
+[初始化] 已发布配置：app（本地配置发布完毕）
+[TCP服务] 已启动，监听：127.0.0.1:8000（JSON-RPC协议）
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:01）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:01）
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:06）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:06）
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:11）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:11）
+[调试] 原始响应: default%02default%01 | 解码后: defaultdefault | 监听配置: dataId=default, group=default 2025-07-30 19:32:14
+[config] app 配置发生变化（dataId: default, group: default） 2025-07-30 19:32:14
+[配置监听] 启动监听流：app（ID: 38） 2025-07-30 19:32:16
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:16）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:16）
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:21）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:21）
+[TCP] 新客户端连接：127.0.0.1:62536（clientId：43）
+[TCP] 收到请求（127.0.0.1:62536）：{"jsonrpc":"2.0","method":"login.login","params":["zhangsan","123456"],"id":"rpc_688a02c94b302"}
+[TCP] 发送响应（127.0.0.1:62536）：{"jsonrpc":"2.0","id":"rpc_688a02c94b302","result":{"success":true,"message":"登录成功","token":"4b650eac580d33294777cae55272609f","expire":3600}}
+[TCP] 新客户端连接：127.0.0.1:62538（clientId：44）
+[TCP] 客户端断开（127.0.0.1:62536）
+[TCP] 收到请求（127.0.0.1:62538）：{"jsonrpc":"2.0","method":"login.out","params":["4b650eac580d33294777cae55272609f"],"id":"rpc_688a02c9b5e31"}
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:26）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:26）
+[TCP] 发送响应（127.0.0.1:62538）：{"jsonrpc":"2.0","id":"rpc_688a02c9b5e31","result":{"success":true,"message":"退出登录成功","token":"4b650eac580d33294777cae55272609f"}}
+[TCP] 新客户端连接：127.0.0.1:62548（clientId：47）
+[TCP] 客户端断开（127.0.0.1:62538）
+[TCP] 收到请求（127.0.0.1:62548）：{"jsonrpc":"2.0","method":"demo.add","params":["张三",20],"id":"rpc_688a02ca2159f"}
+[TCP] 发送响应（127.0.0.1:62548）：{"jsonrpc":"2.0","id":"rpc_688a02ca2159f","result":"用户添加成功！姓名：张三，年龄：20（服务端处理时间：19:32:26）"}
+[TCP] 新客户端连接：127.0.0.1:62549（clientId：48）
+[TCP] 客户端断开（127.0.0.1:62548）
+[TCP] 收到请求（127.0.0.1:62549）：{"jsonrpc":"2.0","method":"demo.get","params":["张三"],"id":"rpc_688a02ca7a7a4"}
+[TCP] 发送响应（127.0.0.1:62549）：{"jsonrpc":"2.0","id":"rpc_688a02ca7a7a4","result":{"name":"张三","age":25,"message":"查询成功（服务端时间：19:32:26）"}}
+[TCP] 客户端断开（127.0.0.1:62549）
+[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:31）
+[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:31）
 ```
 
 客户端的效果是这个样子的
