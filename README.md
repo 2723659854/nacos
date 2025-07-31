@@ -8,7 +8,7 @@ composer require xiaosongshu/nacos
 ```text
 https://github.com/2723659854/nacos
 ```
-### 客户端提供的方法
+### 客户端示例
 ```php
 <?php
 
@@ -21,81 +21,19 @@ $serviceName = 'father';
 $namespace   = 'public';
 
 $client      = new \Xiaosongshu\Nacos\Client('http://127.0.0.1:8848','nacos','nacos');
-var_dump("发布配置");
+
 /** 发布配置 */
-print_r($client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
-var_dump("获取配置需要稍等一秒左右，否则是404");
-/** 获取配置 */
-print_r($client->getConfig($dataId, $group,'public'));
-
-var_dump("监听配置是否发生了变化，有变化则有返回值，无变化则返回空,同时监听配置会阻塞几秒左右");
-/** 监听配置 */
-print_r($client->listenerConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha'])));
-
-var_dump("创建服务，一个服务可以有多个实例提供，一个实例只可以提供 一个服务，但是我这是服务于fpm所以可以一个实例节点可以提供多个服务");
-/** 创建服务 */
-print_r($client->createService($serviceName, $namespace, json_encode(['name' => 'tom', 'age' => 15])));
-
-var_dump("给服务分配一个实例，否则服务是空的，相当于餐馆没有厨师提供服务,这里有一个坑，如果是创建临时实例，则不要创建服务，直接创建实例并指定为临时实例，否则会默认为永久实例而发生冲突");
+$client->publishConfig($dataId, $group, json_encode(['name' => 'fool', 'bar' => 'ha']));
 /** 创建实例 */
-print_r($client->createInstance($serviceName, "192.168.4.110", '9506', $namespace, ['name' => 'tom', 'age' => 15], 50, 1, true));
-
-var_dump("获取服务列表，查看nacos上已注册了哪些服务");
-/** 获取服务列表 */
-print_r($client->getServiceList($namespace));
-
-var_dump("查看这个服务的详细信息");
-/** 服务详情 */
-print_r($client->getServiceDetail($serviceName, $namespace));
-
-var_dump("查看这个服务下有哪些实例可以提供这个服务，就是类似这个餐馆有哪些厨师可以提供炒菜服务");
-/** 获取实例列表 */
-print_r($client->getInstanceList($serviceName, $namespace));
-
-var_dump("给临时实例发送一次心跳，发送心跳的参数必须和创建实例的参数一致才可以，否则实例不健康");
-/** 发送心跳 */
-sleep(1);print_r($client->sendBeat($serviceName, '192.168.4.110', '9506', $namespace,['name' => 'tom', 'age' => 15], true,50));
-var_dump("发送心跳之后，再次获取实例列表，确认健康状态");
-print_r($client->getInstanceList($serviceName, $namespace));
-
-var_dump("获取实例的详情");
-
-/** 获取实例详情 */
-print_r($client->getInstanceDetail($serviceName, true, '192.168.4.110', '9506'));
-
-var_dump("移除某一个实例，要删除的实例必须和当初创建的实例的参数一致才可以删除");
-/** 移除实例*/
-print_r($client->removeInstance($serviceName, '192.168.4.110', 9505, $namespace, true));
+$client->createInstance($serviceName, "192.168.4.110", '9506', $namespace, ['name' => 'tom', 'age' => 15], 50, 1, true)
 ```
 
 ###  应用举例
 
-####  注册发布服务，监听配置
+####  注册发布服务，监听配置示例
 本项目提供已编写好的服务端`Xiaosongshu\Nacos\Server`和客户端`Xiaosongshu\Nacos\JsonRpcClient`。<br>
-你可以编写一个server.php文件，内容如下
 
-```php
-<?php
-
-require_once __DIR__.'/vendor/autoload.php';
-require_once __DIR__."/DemoService.php";
-require_once __DIR__."/LoginService.php";
-
-use Xiaosongshu\Nacos\Server;
-
-// 加载配置文件
-$config = require 'config.php';
-
-// 启动服务
-
-try{
-    $server = new Server($config);
-    $server->run();
-}catch (\Throwable $exception){
-    var_dump($exception->getMessage(),$exception->getLine(),$exception->getFile());
-}
-
-```
+##### 服务端配置文件
 其中配置文件config.php，内容如下：
 ```php
 <?php
@@ -156,6 +94,47 @@ return [
     ]
 ];
 ```
+如果需要监听配置，如上面文件的配置`application.yaml`，假设文件内容如下：
+```text
+app=demo
+debug=true
+
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_USER=root
+DB_PASS=root
+DB_DATABASE=demo
+
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_PASS=123456
+```
+#####  服务端代码
+你可以编写一个server.php文件，内容如下
+
+```php
+<?php
+
+require_once __DIR__.'/vendor/autoload.php';
+require_once __DIR__."/DemoService.php";
+require_once __DIR__."/LoginService.php";
+
+use Xiaosongshu\Nacos\Server;
+
+// 加载配置文件
+$config = require 'config.php';
+
+// 启动服务
+
+try{
+    $server = new Server($config);
+    $server->run();
+}catch (\Throwable $exception){
+    var_dump($exception->getMessage(),$exception->getLine(),$exception->getFile());
+}
+
+```
+
 而服务提供者DemoService.php内容如下
 ```php
 <?php
@@ -253,6 +232,7 @@ class LoginService
 ```bash
 php server.php
 ```
+#####  客户端代码
 这个时候我们再编写一个客户端client.php，用来测试调用服务。内容如下：
 ```php
 <?php
@@ -300,22 +280,25 @@ if ($logoutRes['success']) {
 }
 
 
+/** 测试请求超时，是否会触发服务降级 */
+for ($i=0;$i<=10;$i++) {
 // 3. 调用DemoService的add方法（添加用户）
-$addResult = $client->call(
-    'demo', // 服务标识（对应服务端配置中的serviceKey）
-    [
-        'name' => '张三',  // 对应add方法的$name参数
-        'age' => 20        // 对应add方法的$age参数
-    ],
-    'add' // 要调用的方法名（DemoService的add方法）
-);
+    $addResult = $client->call(
+        'demo', // 服务标识（对应服务端配置中的serviceKey）
+        [
+            'name' => '张三'.$i,  // 对应add方法的$name参数
+            'age' => 20        // 对应add方法的$age参数
+        ],
+        'add' // 要调用的方法名（DemoService的add方法）
+    );
 
 // 处理add方法结果
-if ($addResult['success']) {
-    echo "添加用户结果：{$addResult['result']}\n";
-    echo "调用的服务实例：{$addResult['instance']}\n\n";
-} else {
-    echo "添加用户失败：{$addResult['error']}\n\n";
+    if ($addResult['success']) {
+        echo "添加用户结果：{$addResult['result']}\n";
+        echo "调用的服务实例：{$addResult['instance']}\n\n";
+    } else {
+        echo "添加用户失败：{$addResult['error']}\n\n";
+    }
 }
 
 // 4. 调用DemoService的get方法（查询用户）
@@ -340,77 +323,151 @@ if ($getResult['success']) {
 ```bash
 php client.php
 ```
+
+#####  服务端运行效果
+
 那么服务端测试结果大概效果是这样子的
 ```text
-PS D:\php\nacosDemo> php .\server.php
-[初始化] 已加载服务：demo -> Xiaosongshu\Nacos\Samples\DemoService（元数据解析完成）
-[初始化] 已加载服务：login -> Xiaosongshu\Nacos\Samples\LoginService（元数据解析完成）
-[初始化] 已加载配置：app -> D:\php\nacosDemo/application.yaml
-[配置监听] 启动监听流：app（ID: 23） 2025-07-30 19:32:01
-[Nacos] 已注册服务：demo -> SERVICE@@demo（IP：127.0.0.1:8000）
-[Nacos] 已注册服务：login -> SERVICE@@login（IP：127.0.0.1:8000）
-[初始化] 已发布配置：app（本地配置发布完毕）
-[TCP服务] 已启动，监听：127.0.0.1:8000（JSON-RPC协议）
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:01）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:01）
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:06）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:06）
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:11）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:11）
-[调试] 原始响应: default%02default%01 | 解码后: defaultdefault | 监听配置: dataId=default, group=default 2025-07-30 19:32:14
-[config] app 配置发生变化（dataId: default, group: default） 2025-07-30 19:32:14
-[配置监听] 启动监听流：app（ID: 38） 2025-07-30 19:32:16
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:16）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:16）
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:21）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:21）
-[TCP] 新客户端连接：127.0.0.1:62536（clientId：43）
-[TCP] 收到请求（127.0.0.1:62536）：{"jsonrpc":"2.0","method":"login.login","params":["zhangsan","123456"],"id":"rpc_688a02c94b302"}
-[TCP] 发送响应（127.0.0.1:62536）：{"jsonrpc":"2.0","id":"rpc_688a02c94b302","result":{"success":true,"message":"登录成功","token":"4b650eac580d33294777cae55272609f","expire":3600}}
-[TCP] 新客户端连接：127.0.0.1:62538（clientId：44）
-[TCP] 客户端断开（127.0.0.1:62536）
-[TCP] 收到请求（127.0.0.1:62538）：{"jsonrpc":"2.0","method":"login.out","params":["4b650eac580d33294777cae55272609f"],"id":"rpc_688a02c9b5e31"}
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:26）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:26）
-[TCP] 发送响应（127.0.0.1:62538）：{"jsonrpc":"2.0","id":"rpc_688a02c9b5e31","result":{"success":true,"message":"退出登录成功","token":"4b650eac580d33294777cae55272609f"}}
-[TCP] 新客户端连接：127.0.0.1:62548（clientId：47）
-[TCP] 客户端断开（127.0.0.1:62538）
-[TCP] 收到请求（127.0.0.1:62548）：{"jsonrpc":"2.0","method":"demo.add","params":["张三",20],"id":"rpc_688a02ca2159f"}
-[TCP] 发送响应（127.0.0.1:62548）：{"jsonrpc":"2.0","id":"rpc_688a02ca2159f","result":"用户添加成功！姓名：张三，年龄：20（服务端处理时间：19:32:26）"}
-[TCP] 新客户端连接：127.0.0.1:62549（clientId：48）
-[TCP] 客户端断开（127.0.0.1:62548）
-[TCP] 收到请求（127.0.0.1:62549）：{"jsonrpc":"2.0","method":"demo.get","params":["张三"],"id":"rpc_688a02ca7a7a4"}
-[TCP] 发送响应（127.0.0.1:62549）：{"jsonrpc":"2.0","id":"rpc_688a02ca7a7a4","result":{"name":"张三","age":25,"message":"查询成功（服务端时间：19:32:26）"}}
-[TCP] 客户端断开（127.0.0.1:62549）
-[心跳] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService（19:32:31）
-[心跳] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService（19:32:31）
+PS D:\php\nacosServer> php .\server.php
+2025-07-31 15:57:30 [warn]系统已启动debug模式，你可以设置isDebug=false关闭调试模式
+2025-07-31 15:57:30 [init] 已加载服务：demo -> Xiaosongshu\Nacos\Samples\DemoService（元数据解析完成）
+2025-07-31 15:57:30 [init] 已加载服务：login -> Xiaosongshu\Nacos\Samples\LoginService（元数据解析完成）
+2025-07-31 15:57:30 [init] 已加载配置：app -> D:\php\nacosServer/application.yaml
+2025-07-31 15:57:30 [config] 启动监听流：app（ID: 18）
+2025-07-31 15:57:30 [service] 已注册服务：demo -> SERVICE@@demo（IP：127.0.0.1:8000）
+2025-07-31 15:57:30 [service] 已注册服务：login -> SERVICE@@login（IP：127.0.0.1:8000）
+2025-07-31 15:57:30 [init] 已发布配置：app（本地配置发布完毕）
+2025-07-31 15:57:30 [init] 已启动，监听：127.0.0.1:8000（JSON-RPC协议）
+2025-07-31 15:57:30 [heartbeat] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService
+2025-07-31 15:57:30 [heartbeat] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService
+2025-07-31 15:57:30 [debug] 原始响应: default%02default%01 | 解码后: defaultdefault | 监听配置: dataId=default, group=default
+2025-07-31 15:57:30 [config] app 配置发生变化（dataId: default, group: default）
+2025-07-31 15:57:32 [config] 启动监听流：app（ID: 27）
+2025-07-31 15:57:35 [heartbeat] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService
+2025-07-31 15:57:35 [heartbeat] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService
+2025-07-31 15:57:37 [tcp] 新客户端连接：127.0.0.1:56684（clientId：30）
+2025-07-31 15:57:37 [tcp] 收到请求（127.0.0.1:56684）：{"jsonrpc":"2.0","method":"login.login","params":["zhangsan","123456"],"id":"rpc_688b21f0dc968"}
+2025-07-31 15:57:37 [tcp] 发送响应（127.0.0.1:56684）：{"jsonrpc":"2.0","id":"rpc_688b21f0dc968","result":{"success":true,"message":"登录成功","token":"68fe7ea8cbec945cec906ce3b48172dc","expire":3600}}
+2025-07-31 15:57:37 [tcp] 新客户端连接：127.0.0.1:56685（clientId：31）
+2025-07-31 15:57:37 [tcp] 客户端断开（127.0.0.1:56684）
+2025-07-31 15:57:37 [tcp] 收到请求（127.0.0.1:56685）：{"jsonrpc":"2.0","method":"login.out","params":["68fe7ea8cbec945cec906ce3b48172dc"],"id":"rpc_688b21f15a126"}
+2025-07-31 15:57:37 [tcp] 发送响应（127.0.0.1:56685）：{"jsonrpc":"2.0","id":"rpc_688b21f15a126","result":{"success":true,"message":"退出登录成功","token":"68fe7ea8cbec945cec906ce3b48172dc"}}
+2025-07-31 15:57:37 [tcp] 新客户端连接：127.0.0.1:56689（clientId：32）
+2025-07-31 15:57:37 [tcp] 客户端断开（127.0.0.1:56685）
+2025-07-31 15:57:37 [tcp] 收到请求（127.0.0.1:56689）：{"jsonrpc":"2.0","method":"demo.add","params":["张三0",20],"id":"rpc_688b21f1b7950"}
+2025-07-31 15:57:38 [tcp] 发送响应（127.0.0.1:56689）：{"jsonrpc":"2.0","id":"rpc_688b21f1b7950","result":"用户添加成功！姓名：张三0，年龄：20（服务端处理时间：15:57:37）"}
+2025-07-31 15:57:38 [tcp] 新客户端连接：127.0.0.1:56690（clientId：33）
+2025-07-31 15:57:38 [tcp] 客户端断开（127.0.0.1:56689）
+2025-07-31 15:57:38 [tcp] 收到请求（127.0.0.1:56690）：{"jsonrpc":"2.0","method":"demo.add","params":["张三1",20],"id":"rpc_688b21f21cd01"}
+2025-07-31 15:57:38 [tcp] 发送响应（127.0.0.1:56690）：{"jsonrpc":"2.0","id":"rpc_688b21f21cd01","result":"用户添加成功！姓名：张三1，年龄：20（服务端处理时间：15:57:38）"}
+2025-07-31 15:57:38 [tcp] 新客户端连接：127.0.0.1:56691（clientId：34）
+2025-07-31 15:57:38 [tcp] 客户端断开（127.0.0.1:56690）
+2025-07-31 15:57:38 [tcp] 收到请求（127.0.0.1:56691）：{"jsonrpc":"2.0","method":"demo.add","params":["张三2",20],"id":"rpc_688b21f2778d6"}
+2025-07-31 15:57:38 [tcp] 发送响应（127.0.0.1:56691）：{"jsonrpc":"2.0","id":"rpc_688b21f2778d6","result":"用户添加成功！姓名：张三2，年龄：20（服务端处理时间：15:57:38）"}
+2025-07-31 15:57:38 [tcp] 新客户端连接：127.0.0.1:56692（clientId：35）
+2025-07-31 15:57:38 [tcp] 客户端断开（127.0.0.1:56691）
+2025-07-31 15:57:39 [tcp] 收到请求（127.0.0.1:56692）：{"jsonrpc":"2.0","method":"demo.add","params":["张三3",20],"id":"rpc_688b21f2d3cfb"}
+2025-07-31 15:57:39 [tcp] 发送响应（127.0.0.1:56692）：{"jsonrpc":"2.0","id":"rpc_688b21f2d3cfb","result":"用户添加成功！姓名：张三3，年龄：20（服务端处理时间：15:57:39）"}
+2025-07-31 15:57:39 [tcp] 新客户端连接：127.0.0.1:56694（clientId：36）
+2025-07-31 15:57:39 [tcp] 客户端断开（127.0.0.1:56692）
+2025-07-31 15:57:39 [tcp] 收到请求（127.0.0.1:56694）：{"jsonrpc":"2.0","method":"demo.add","params":["张三4",20],"id":"rpc_688b21f33ac20"}
+2025-07-31 15:57:39 [tcp] 发送响应（127.0.0.1:56694）：{"jsonrpc":"2.0","id":"rpc_688b21f33ac20","result":"用户添加成功！姓名：张三4，年龄：20（服务端处理时间：15:57:39）"}
+2025-07-31 15:57:39 [tcp] 新客户端连接：127.0.0.1:56695（clientId：37）
+2025-07-31 15:57:39 [tcp] 客户端断开（127.0.0.1:56694）
+2025-07-31 15:57:39 [tcp] 收到请求（127.0.0.1:56695）：{"jsonrpc":"2.0","method":"demo.add","params":["张三5",20],"id":"rpc_688b21f396de1"}
+2025-07-31 15:57:39 [tcp] 发送响应（127.0.0.1:56695）：{"jsonrpc":"2.0","id":"rpc_688b21f396de1","result":"用户添加成功！姓名：张三5，年龄：20（服务端处理时间：15:57:39）"}
+2025-07-31 15:57:40 [heartbeat] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService
+2025-07-31 15:57:40 [heartbeat] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService
+2025-07-31 15:57:40 [tcp] 新客户端连接：127.0.0.1:56696（clientId：40）
+2025-07-31 15:57:40 [tcp] 客户端断开（127.0.0.1:56695）
+2025-07-31 15:57:40 [tcp] 收到请求（127.0.0.1:56696）：{"jsonrpc":"2.0","method":"demo.add","params":["张三6",20],"id":"rpc_688b21f3f2711"}
+2025-07-31 15:57:40 [tcp] 发送响应（127.0.0.1:56696）：{"jsonrpc":"2.0","id":"rpc_688b21f3f2711","result":"用户添加成功！姓名：张三6，年龄：20（服务端处理时间：15:57:40）"}
+2025-07-31 15:57:40 [tcp] 新客户端连接：127.0.0.1:56703（clientId：41）
+2025-07-31 15:57:40 [tcp] 客户端断开（127.0.0.1:56696）
+2025-07-31 15:57:40 [tcp] 收到请求（127.0.0.1:56703）：{"jsonrpc":"2.0","method":"demo.add","params":["张三7",20],"id":"rpc_688b21f460c2d"}
+2025-07-31 15:57:40 [tcp] 发送响应（127.0.0.1:56703）：{"jsonrpc":"2.0","id":"rpc_688b21f460c2d","result":"用户添加成功！姓名：张三7，年龄：20（服务端处理时间：15:57:40）"}
+2025-07-31 15:57:40 [tcp] 新客户端连接：127.0.0.1:56704（clientId：42）
+2025-07-31 15:57:40 [tcp] 客户端断开（127.0.0.1:56703）
+2025-07-31 15:57:41 [tcp] 收到请求（127.0.0.1:56704）：{"jsonrpc":"2.0","method":"demo.add","params":["张三8",20],"id":"rpc_688b21f4bc128"}
+2025-07-31 15:57:41 [tcp] 发送响应（127.0.0.1:56704）：{"jsonrpc":"2.0","id":"rpc_688b21f4bc128","result":"用户添加成功！姓名：张三8，年龄：20（服务端处理时间：15:57:41）"}
+2025-07-31 15:57:41 [tcp] 新客户端连接：127.0.0.1:56707（clientId：43）
+2025-07-31 15:57:41 [tcp] 客户端断开（127.0.0.1:56704）
+2025-07-31 15:57:41 [tcp] 收到请求（127.0.0.1:56707）：{"jsonrpc":"2.0","method":"demo.add","params":["张三9",20],"id":"rpc_688b21f523d36"}
+2025-07-31 15:57:41 [tcp] 发送响应（127.0.0.1:56707）：{"jsonrpc":"2.0","id":"rpc_688b21f523d36","result":"用户添加成功！姓名：张三9，年龄：20（服务端处理时间：15:57:41）"}
+2025-07-31 15:57:41 [tcp] 新客户端连接：127.0.0.1:56708（clientId：44）
+2025-07-31 15:57:41 [tcp] 客户端断开（127.0.0.1:56707）
+2025-07-31 15:57:41 [tcp] 收到请求（127.0.0.1:56708）：{"jsonrpc":"2.0","method":"demo.add","params":["张三10",20],"id":"rpc_688b21f58026e"}
+2025-07-31 15:57:41 [tcp] 发送响应（127.0.0.1:56708）：{"jsonrpc":"2.0","id":"rpc_688b21f58026e","result":"用户添加成功！姓名：张三10，年龄：20（服务端处理时间：15:57:41）"}
+2025-07-31 15:57:42 [tcp] 新客户端连接：127.0.0.1:56709（clientId：45）
+2025-07-31 15:57:42 [tcp] 客户端断开（127.0.0.1:56708）
+2025-07-31 15:57:42 [tcp] 收到请求（127.0.0.1:56709）：{"jsonrpc":"2.0","method":"demo.get","params":["张三"],"id":"rpc_688b21f5dafd0"}
+2025-07-31 15:57:42 [tcp] 发送响应（127.0.0.1:56709）：{"jsonrpc":"2.0","id":"rpc_688b21f5dafd0","result":{"name":"张三","age":25,"message":"查询成功（服务端时间：15:57:42）"}}
+2025-07-31 15:57:42 [tcp] 客户端断开（127.0.0.1:56709）
+2025-07-31 15:57:45 [heartbeat] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService
+2025-07-31 15:57:45 [heartbeat] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService
+2025-07-31 15:57:50 [heartbeat] 成功（demo）->Xiaosongshu\Nacos\Samples\DemoService
+2025-07-31 15:57:50 [heartbeat] 成功（login）->Xiaosongshu\Nacos\Samples\LoginService
 ```
 
 客户端的效果是这个样子的
 ```text
 PS D:\php\nacosServer> php .\client.php
 登录成功：
-Token：2d7b6bd23bd38d6051bf06a2d55c6eca
+Token：68fe7ea8cbec945cec906ce3b48172dc
 有效期：3600秒
-调用实例：192.168.110.72:8000
+调用实例：127.0.0.1:8000
 退出登录成功：
-Token：2d7b6bd23bd38d6051bf06a2d55c6eca
-调用实例：192.168.110.72:8000
-添加用户结果：用户添加成功！姓名：张三，年龄：20（服务端处理时间：18:52:47）
-调用的服务实例：192.168.110.72:8000
+Token：68fe7ea8cbec945cec906ce3b48172dc
+调用实例：127.0.0.1:8000
+添加用户结果：用户添加成功！姓名：张三0，年龄：20（服务端处理时间：15:57:37）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三1，年龄：20（服务端处理时间：15:57:38）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三2，年龄：20（服务端处理时间：15:57:38）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三3，年龄：20（服务端处理时间：15:57:39）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三4，年龄：20（服务端处理时间：15:57:39）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三5，年龄：20（服务端处理时间：15:57:39）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三6，年龄：20（服务端处理时间：15:57:40）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三7，年龄：20（服务端处理时间：15:57:40）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三8，年龄：20（服务端处理时间：15:57:41）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三9，年龄：20（服务端处理时间：15:57:41）
+调用的服务实例：127.0.0.1:8000
+
+添加用户结果：用户添加成功！姓名：张三10，年龄：20（服务端处理时间：15:57:41）
+调用的服务实例：127.0.0.1:8000
 
 查询用户结果：
 Array
 (
     [name] => 张三
     [age] => 25
-    [message] => 查询成功（服务端时间：18:52:47）
+    [message] => 查询成功（服务端时间：15:57:42）
 )
-调用的服务实例：192.168.110.72:8000
+调用的服务实例：127.0.0.1:8000
+所有请求处理完毕
 
 ```
-以上代码亲测可用，当然你可能需要根据你的实际业务调整一下才行。
-#### 搭建nacos
+
+#### 服务降级和熔断
+
+系统默认超时率大于等于50%的时候，会对服务进行降级处理，当超时率低于50%的时候会逐步恢复。当服务的错误率高于50%的时候，会对服务进行熔断处理，然后系统会尝试自动恢复服务。
+#### 一键搭建nacos服务
 
 ```bash
 docker run --name nacos -e MODE=standalone --env NACOS_AUTH_ENABLE=true -p 8848:8848 -p 31181:31181 -d nacos/nacos-server:1.3.1
