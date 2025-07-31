@@ -100,7 +100,7 @@ class Server
         if (isset($this->configStreamMap[$name])) {
             $existingSocket = $this->configStreamMap[$name];
             if (is_resource($existingSocket) && !feof($existingSocket)) {
-                echo "[配置监听] 已存在监听流：{$name}（ID: " . (int)$existingSocket . "），无需重复创建\n";
+                echo "[config] 已存在监听流：{$name}（ID: " . (int)$existingSocket . "），无需重复创建\n";
                 return;
             }
         }
@@ -148,7 +148,7 @@ class Server
         );
 
         if (!$socket) {
-            echo "[配置监听] 连接失败：{$name}，3秒后重试...\n";
+            echo "[config] 连接失败：{$name}，3秒后重试...\n";
             $this->configListen[$name]['retry'] = time() + 3;
             return;
         }
@@ -175,8 +175,8 @@ class Server
         ];
         $this->configStreamMap[$name] = $socket;
 
-        $now = date('Y-m-d H:i:s');
-        echo "[配置监听] 启动监听流：{$name}（ID: {$streamId}） {$now}\n";
+        $now = date('H:i:s');
+        echo "[config] 启动监听流：{$name}（ID: {$streamId}） （{$now}）\n";
     }
 
     /**
@@ -201,7 +201,7 @@ class Server
             }
 
             if (empty($responseData)) {
-                $now = date('Y-m-d H:i:s');
+                $now = date('H:i:s');
                 echo "[config] {$name} 长轮询超时（无数据） {$now}\n";
                 return;
             }
@@ -211,7 +211,7 @@ class Server
             if ($headerEndPos === false) {
                 if (strpos($responseData, "HTTP/1.1 200 OK") !== false) {
                     $now = date('Y-m-d H:i:s');
-                    echo "[config] {$name} 配置未变化（超时） {$now}\n";
+                    echo "[config] {$name} 配置未变化（超时） （{$now}）\n";
                     return;
                 }
                 throw new \Exception("无效的HTTP响应格式");
@@ -248,11 +248,11 @@ class Server
             $body = $this->parseHttpBody($responseData, $headerEndPos, $headers);
             $body = trim($body);
 
-            $now = date('Y-m-d H:i:s');
+            $now = date('H:i:s');
             if ($httpStatus == 200 && !empty($body)) {
                 // 解码URL编码的响应
                 $decodedBody = urldecode($body);
-                echo "[调试] 原始响应: {$body} | 解码后: {$decodedBody} | 监听配置: dataId={$config['dataId']}, group={$config['group']} {$now}\n";
+                echo "[debug] 原始响应: {$body} | 解码后: {$decodedBody} | 监听配置: dataId={$config['dataId']}, group={$config['group']} （{$now}）\n";
 
                 // 分割变更条目
                 $changeEntries = explode(self::LINE_SEPARATOR, $decodedBody);
@@ -273,7 +273,7 @@ class Server
 
                     // 精确匹配dataId和group
                     if ($changedDataId === $config['dataId'] && $normalizedChangedGroup === $normalizedConfigGroup) {
-                        echo "[config] {$name} 配置发生变化（dataId: {$changedDataId}, group: {$changedGroup}） {$now}\n";
+                        echo "[config] {$name} 配置发生变化（dataId: {$changedDataId}, group: {$changedGroup}） ({$now})\n";
                         $configChanged = true; // 标记发生了配置变更
 
                         // 获取最新配置
@@ -416,12 +416,13 @@ class Server
     {
         foreach ($this->config['config'] ?? [] as $name => $config) {
             $this->configListen[$name] = $config;
+            $now = date("H:i:s");
             if (file_exists($config['file'])) {
                 $this->configListen[$name]['content'] = @file_get_contents($config['file']);
-                echo "[初始化] 已加载配置：{$name} -> {$config['file']}\n";
+                echo "[init] 已加载配置：{$name} -> {$config['file']} （{$now}）\n";
             } else {
                 $this->configListen[$name]['content'] = "";
-                echo "[初始化] 已加载配置：{$name} -> {$config['file']}（文件不存在）\n";
+                echo "[init] 已加载配置：{$name} -> {$config['file']}（文件不存在）（{$now}）\n";
             }
 
             if (!empty($config['enable'])) {
@@ -633,8 +634,8 @@ class Server
 
             // 初始化心跳开关（默认发送心跳）
             $this->sendHeartbeat[$serviceKey] = true;
-
-            echo "[初始化] 已加载服务：{$serviceKey} -> {$serviceClass}（元数据解析完成）\n";
+            $now = date('H:i:s');
+            echo "[init] 已加载服务：{$serviceKey} -> {$serviceClass}（元数据解析完成）（{$now}）\n";
         }
     }
 
@@ -705,7 +706,7 @@ class Server
             register_shutdown_function([$this, 'shutdown']);
             $this->eventLoop();
         } catch (Exception $e) {
-            echo "[错误] 服务启动失败：{$e->getMessage()}\n";
+            echo "[error] 服务启动失败：{$e->getMessage()}\n";
             $this->shutdown();
             exit(1);
         }
@@ -723,7 +724,8 @@ class Server
             }
             if (!empty($config['content'])) {
                 $this->nacosClient->publishConfig($config['dataId'], $config['group'], $config['content']);
-                echo "[初始化] 已发布配置：{$name}（本地配置发布完毕）\n";
+                $now = date("H:i:s");
+                echo "[init] 已发布配置：{$name}（本地配置发布完毕）（{$now}）\n";
             }
         }
     }
@@ -750,8 +752,8 @@ class Server
             if (isset($result['error'])) {
                 throw new Exception("Nacos注册失败（{$service['serviceKey']}）：{$result['error']}");
             }
-
-            echo "[Nacos] 已注册服务：{$service['serviceKey']} -> {$service['nacosServiceName']}（IP：{$this->instanceConfig['ip']}:{$this->instanceConfig['port']}）\n";
+            $now = date("H:i:s");
+            echo "[service] 已注册服务：{$service['serviceKey']} -> {$service['nacosServiceName']}（IP：{$this->instanceConfig['ip']}:{$this->instanceConfig['port']}）（{$now}）\n";
         }
     }
 
@@ -780,8 +782,8 @@ class Server
         if (\socket_listen($this->serverSocket, 100) === false) {
             throw new Exception("监听端口失败（{$ip}:{$port}）：" . \socket_strerror(\socket_last_error($this->serverSocket)));
         }
-
-        echo "[TCP服务] 已启动，监听：{$ip}:{$port}（JSON-RPC协议）\n";
+        $now = date("H:i:s");
+        echo "[init] 已启动，监听：{$ip}:{$port}（JSON-RPC协议）（{$now}）\n";
     }
 
     /**
@@ -830,7 +832,7 @@ class Server
         foreach ($this->enabledServices as $serviceKey => $service) {
             // 跳过关闭心跳的服务（熔断中）
             if (!$this->sendHeartbeat[$serviceKey]) {
-                echo "[心跳] 已停止（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
+                echo "[heartbeat] 已停止（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
                 continue;
             }
 
@@ -846,9 +848,9 @@ class Server
             );
 
             if (isset($result['error'])) {
-                echo "[心跳] 失败（{$serviceKey}）->{$service['serviceClass']}：{$result['error']}\n";
+                echo "[heartbeat] 失败（{$serviceKey}）->{$service['serviceClass']}：{$result['error']}\n";
             } else {
-                echo "[心跳] 成功（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
+                echo "[heartbeat] 成功（{$serviceKey}）->{$service['serviceClass']}（" . date('H:i:s') . "）\n";
             }
         }
     }
@@ -873,8 +875,8 @@ class Server
         $this->clients[$clientId] = $newClient;
         $this->clientAddresses[$clientId] = $clientAddr;
         $this->writeBuffers[$clientId] = [];
-
-        echo "[TCP] 新客户端连接：{$clientAddr}（clientId：{$clientId}）\n";
+        $now = date("H:i:s");
+        echo "[tcp] 新客户端连接：{$clientAddr}（clientId：{$clientId}）（{$now}）\n";
     }
 
     /**
@@ -893,18 +895,18 @@ class Server
             $errorMsg = in_array($errorCode, [\SOCKET_ECONNRESET, \SOCKET_ETIMEDOUT])
                 ? "Client closed connection or timeout"
                 : "Read error (code: {$errorCode})";
-            echo "[TCP] 读取错误（{$clientAddr}）：{$errorMsg}\n";
+            echo "[tcp] 读取错误（{$clientAddr}）：{$errorMsg}\n";
             $this->closeClient($socket);
             return;
         }
 
         if (trim($data) === '') {
-            echo "[TCP] 客户端断开（{$clientAddr}）\n";
+            echo "[tcp] 客户端断开（{$clientAddr}）\n";
             $this->closeClient($socket);
             return;
         }
 
-        echo "[TCP] 收到请求（{$clientAddr}）：{$data}";
+        echo "[tcp] 收到请求（{$clientAddr}）：{$data}";
         $response = $this->processJsonRpcRequest(trim($data));
         $this->writeBuffers[$clientId][] = $response . "\n";
     }
@@ -924,7 +926,7 @@ class Server
             $bytesWritten = \socket_write($socket, $response);
 
             if ($bytesWritten === false) {
-                echo "[TCP] 发送失败（{$clientAddr}）：" . \socket_strerror(\socket_last_error($socket)) . "\n";
+                echo "[tcp] 发送失败（{$clientAddr}）：" . \socket_strerror(\socket_last_error($socket)) . "\n";
                 $this->closeClient($socket);
                 break;
             }
@@ -935,7 +937,7 @@ class Server
                 break;
             }
 
-            echo "[TCP] 发送响应（{$clientAddr}）：{$response}";
+            echo "[tcp] 发送响应（{$clientAddr}）：{$response}";
         }
     }
 
@@ -1103,7 +1105,7 @@ class Server
      */
     public function shutdown()
     {
-        echo "\n[退出] 开始清理资源...\n";
+        echo "\n[exit] 开始清理资源...\n";
 
         // 关闭配置监听流
         foreach ($this->configStreams as $info) {
@@ -1119,7 +1121,7 @@ class Server
                 $service['namespace'],
                 'true'
             );
-            echo "[退出] 已注销服务：{$service['serviceKey']}\n";
+            echo "[exit] 已注销服务：{$service['serviceKey']}\n";
         }
 
         // 关闭客户端连接
@@ -1132,7 +1134,7 @@ class Server
             \socket_close($this->serverSocket);
         }
 
-        echo "[退出] 资源清理完成\n";
+        echo "[exit] 资源清理完成\n";
     }
 
     /**
@@ -1212,7 +1214,7 @@ class Server
         if ($errorRate >= 0.5 && $coolDownPassed && $stats['currentHealthy']) {
             // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
             $this->sendHeartbeat[$serviceKey] = false;
-            echo "[{$serviceKey}服务] 触发熔断（错误率{$errorRate}），已停止发送心跳\n";
+            echo "[{$serviceKey} service] 触发熔断（错误率{$errorRate}），已停止发送心跳\n";
 
             // 更新本地状态
             $this->requestStats[$serviceKey]['currentHealthy'] = false;
@@ -1224,7 +1226,7 @@ class Server
         if ($errorRate < 0.5 && $coolDownPassed && !$stats['currentHealthy']) {
             // 恢复发送心跳（Nacos会在收到心跳后标记实例为健康）
             $this->sendHeartbeat[$serviceKey] = true;
-            echo "[{$serviceKey}服务] 恢复健康（错误率{$errorRate}），已恢复发送心跳\n";
+            echo "[{$serviceKey} service] 恢复健康（错误率{$errorRate}），已恢复发送心跳\n";
 
             // 更新本地状态
             $this->requestStats[$serviceKey]['currentHealthy'] = true;
@@ -1265,9 +1267,9 @@ class Server
                 $metadata
             );
             if (isset($result['error'])) {
-                echo "[{$serviceKey}服务] 降级失败（超时率{$timeoutRate}）：{$result['error']}\n";
+                echo "[{$serviceKey} service] 降级失败（超时率{$timeoutRate}）：{$result['error']}\n";
             } else {
-                echo "[{$serviceKey}服务] 触发降级（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
+                echo "[{$serviceKey} service] 触发降级（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
                 $this->requestStats[$serviceKey]['currentWeight'] = $newWeight;
                 $this->requestStats[$serviceKey]['lastWeightAdjust'] = $now;
             }
@@ -1292,9 +1294,9 @@ class Server
                 $metadata
             );
             if (isset($result['error'])) {
-                echo "[{$serviceKey}服务] 恢复权重失败（超时率{$timeoutRate}）：{$result['error']}\n";
+                echo "[{$serviceKey} service] 恢复权重失败（超时率{$timeoutRate}）：{$result['error']}\n";
             } else {
-                echo "[{$serviceKey}服务] 恢复权重（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
+                echo "[{$serviceKey} service] 恢复权重（超时率{$timeoutRate}），权重从{$currentWeight}调整为{$newWeight}\n";
                 $this->requestStats[$serviceKey]['currentWeight'] = $newWeight;
                 $this->requestStats[$serviceKey]['lastWeightAdjust'] = $now;
             }

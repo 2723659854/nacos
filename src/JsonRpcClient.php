@@ -50,7 +50,7 @@ class JsonRpcClient
      * @param int $timeout 超时时间（秒）
      * @throws \Exception
      */
-    public function __construct(array $nacosConfig, string $namespace = 'public', int $timeout = 15)
+    public function __construct(array $nacosConfig, string $namespace = 'public', int $timeout = 5)
     {
         $this->nacosClient = new Client(
             $nacosConfig['host'] ?? 'http://127.0.0.1:8848',
