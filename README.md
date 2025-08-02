@@ -479,6 +479,199 @@ Array
 ```bash
 docker run --name nacos -e MODE=standalone --env NACOS_AUTH_ENABLE=true -p 8848:8848 -p 31181:31181 -d nacos/nacos-server:1.3.1
 ```
+### 和常用的框架集成
+当你看到这里的时候，需要一些常用框架的基本知识了，此处默认你都已掌握。
+#### thinkphp5.1
+首先配置需要的服务，我这里只需要用到服务注册发现模块，那么`\config\nacos.php`配置如下，
+```php
+<?php
 
+
+return [
+
+    /** 连接服务器的基本配置 */
+    'server' => [
+        'host' => 'http://127.0.0.1:8848',
+        'username' => 'nacos',
+        'password' => 'nacos',
+        'heartbeat_interval' => 5, // 心跳间隔（秒，默认5秒）
+    ],
+
+    /** 服务提供者实例的配置 */
+    'instance' => [
+        'ip' => '127.0.0.1',
+        'port' => '9562',
+        'weight' => 100, // 初始权重（降级时会动态调整）
+        'timeout_threshold' => 1000, // 超时阈值（毫秒，超过此时间视为超时，用于计算超时率）
+    ],
+
+    /** 健康检查与熔断降级配置 */
+    'health' => [
+        'stat_window_size' => 10, // 统计窗口大小（最近100个请求用于计算超时率/错误率）
+        'adjust_cool_down' => 10, // 调整冷却时间（秒，避免频繁调整，默认30秒）
+    ],
+
+    'config' => [
+        'app' => [
+            # 是否开启监听
+            'enable' => false,
+            'dataId' => 'default',
+            'group' => 'default',
+            'file' => __DIR__ . '/application.yaml',
+            'callback' => function ($content) {
+                file_put_contents(__DIR__ . "/application.yaml", $content);
+            }
+        ],
+    ],
+
+    /** 需要注册的服务 */
+    'service' => [
+        'wechat' => [
+            'enable' => true,
+            'serviceName' => \app\service\WechatService::class,
+            'namespace' => 'public',
+        ],
+    ]
+];
+```
+需要注册的服务提供者`\app\service\WechatService::class`内容如下：
+```php
+<?php
+namespace app\service;
+
+/**
+ * @purpose 服务提供者
+ * @author yanglong
+ * @time 2025年8月1日11:00:17
+ */
+class WechatService
+{
+
+    /**
+     * 业务逻辑
+     * @param string $phone 
+     * @param string $wechat 
+     * @return array
+     */
+    public function handle(string $phone,string $wechat)
+    {
+        //todo 这里是你的业务逻辑，请根据实际需求完善
+        return ['status'=>200,'message'=>'ok'];
+    }
+}
+```
+作者将nacos服务放在了命令行中，使用thinkphp的命令行来启动服务，`\app\command\NacosServer::class`的内容如下：
+```php
+<?php
+
+namespace app\command;
+
+use app\service\Token;
+use think\console\Command;
+use think\console\Input;
+use think\console\Output;
+use Xiaosongshu\Nacos\Server;
+
+/**
+ * @purpose 测试微服务
+ * @author yanglong
+ * @time 2025年8月1日11:56:06
+ * @command nohup php think start:nacos >/dev/null 2>&1 &
+ */
+class NacosServer extends Command
+{
+    protected function configure()
+    {
+        // 指令配置
+        $this->setName('start:nacos');
+        // 设置参数
+        
+    }
+
+    protected function execute(Input $input, Output $output)
+    {
+    	// 指令输出
+
+        $configFile = $this->getConfigPath(). '/nacos.php';
+        if (file_exists($configFile)) {
+            $config = include $configFile;
+        }else{
+            $output->writeln("配置文件 【".$configFile."】不存在");
+            return;
+        }
+        $output->writeln('启动nacos服务器');
+       
+       # 为了防止nacos服务因为服务暂时关闭异常断开等情况，此处设置为循环执行，即使断开也会自动重新启动
+        while (true){
+            try{
+                $server = new Server($config);
+                # 如果你需要记录服务端运行日志，那么需要设置log回调函数来处理日志记录，此处仅作为实例演示，实际代码根据你的业务需求编写
+                $server->log = function ($message){
+                  $this->log(200,$message);
+                };
+                $server->run();
+            }catch (\Throwable $exception){
+                $this->error(400,$exception->getMessage());
+                var_dump($exception->getMessage());
+            }
+        }
+    }
+
+    /**
+     * 错误日志
+     * @param int $code 状态码
+     * @param string $message 消息
+     * @return void
+     */
+    public function error(int $code, string $message)
+    {
+        $file = Token::getLogPath() . date('Y_m_d')."_nacos_error.log";
+        $content = "[error]时间：" . date('Y-m-d H:i:s') . " 消费者[0]"." 状态码：{$code} 消息：发生了异常， 详情：" . $message. "\r\n";
+        file_put_contents($file,$content);
+    }
+
+    /**
+     * 运行日志
+     * @param int $code
+     * @param string $message
+     * @return void
+     */
+    public function log(int $code, string $message)
+    {
+        $file = Token::getLogPath() . date('Y_m_d')."_nacos_info.log";
+        $content = "[info]时间：" . date('Y-m-d H:i:s') . " 消费者[0]"." 状态码：{$code} 消息：运行日志， 详情：" . $message. "\r\n";
+        file_put_contents($file,$content);
+    }
+
+    /**
+     * 获取配置文件路径
+     * @return string
+     */
+    public function getConfigPath()
+    {
+        return dirname(__DIR__,2)."/config";
+    }
+}
+
+```
+启动服务端，你需要执行以下命令：
+```bash
+php think start:nacos
+```
+如果是你在linux服务器上，需要无人值守模式，那么执行以下命令
+```bash
+nohup php think start:nacos >/dev/null 2>&1 &
+```
+接下来是客户端的调用，你可以在你的任何业务端代码里面（包括但不限于控制器，命令行），代码如下：
+```php
+<?php
+require_once dirname(__DIR__,3) . '/vendor/autoload.php';
+use Xiaosongshu\Nacos\JsonRpcClient;
+
+ $client = new JsonRpcClient(self::$nacosConfig);
+ $client->call('wechat',['phone'=>$phone,'wechat'=>$wechat],'handle');
+
+```
+接下来你可以启用你的业务代码测试。当然以上代码只是作者的demo，实际上你的项目路径可能不一样，请根据实际情况调整。当前插件可以集成到thinkphp，laravel，yii，webman等等常用的框架，因为用法都一样，这里就不一一列举了。
 
 
