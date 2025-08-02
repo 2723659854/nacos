@@ -708,7 +708,7 @@ class Server
             register_shutdown_function([$this, 'shutdown']);
             $this->eventLoop();
         } catch (Throwable $throwable) {
-            $this->info("[error] 服务启动失败：{$throwable->getMessage()}");
+            $this->info("[error] 服务启动失败或者异常退出：{$throwable->getMessage()}");
             $this->shutdown();
         }
     }
