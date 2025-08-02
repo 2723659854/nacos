@@ -710,8 +710,6 @@ class Server
         } catch (Throwable $throwable) {
             $this->info("[error] 服务启动失败：{$throwable->getMessage()}");
             $this->shutdown();
-            # 启动失败，这里不可以自动重启，应该去排查失败原因解决后手动重启，否则就会浪费时间和资源
-            exit(1);
         }
     }
 
