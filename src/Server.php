@@ -5,6 +5,7 @@ namespace Xiaosongshu\Nacos;
 use \Exception;
 use \ReflectionClass;
 use \ReflectionMethod;
+use Throwable;
 
 /**
  * 微服务服务端（支持元数据自动上报、服务降级与熔断）
@@ -78,6 +79,9 @@ class Server
 
     # 是否开启调试模式
     public $isDebug = false;
+
+    /** 日志回调函数 */
+    public $log = null;
 
     /**
      * 初始化
@@ -703,9 +707,10 @@ class Server
             $this->startTcpServer();
             register_shutdown_function([$this, 'shutdown']);
             $this->eventLoop();
-        } catch (Exception $e) {
-            $this->info("[error] 服务启动失败：{$e->getMessage()}");
+        } catch (Throwable $throwable) {
+            $this->info("[error] 服务启动失败：{$throwable->getMessage()}");
             $this->shutdown();
+            # 启动失败，这里不可以自动重启，应该去排查失败原因解决后手动重启，否则就会浪费时间和资源
             exit(1);
         }
     }
@@ -760,10 +765,18 @@ class Server
      */
     private function info(string $message)
     {
+        $message = date('Y-m-d H:i:s')." ".trim($message);
         if ($this->isDebug){
-            echo date('Y-m-d H:i:s')." ";
-            echo trim($message);
+            echo $message;
             echo "\n";
+        }
+        if (isset($this->log) && is_callable($this->log)) {
+            try{
+                call_user_func($this->log, $message);
+            }catch (\Throwable $exception){
+                echo "日志处理异常：".$exception->getMessage();
+                echo "\n";
+            }
         }
     }
 
@@ -958,11 +971,13 @@ class Server
     {
         $request = json_decode($jsonData, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
+            $this->info("[error] ".self::ERROR_PARSE["message"]);
             return $this->buildJsonRpcResponse(null, self::ERROR_PARSE);
         }
 
         if (!isset($request['jsonrpc']) || $request['jsonrpc'] !== self::JSON_RPC_VERSION
             || !isset($request['method']) || !isset($request['id'])) {
+            $this->info("[error] ".self::ERROR_INVALID_REQUEST["message"]);
             return $this->buildJsonRpcResponse($request['id'] ?? null, self::ERROR_INVALID_REQUEST);
         }
 
@@ -972,6 +987,7 @@ class Server
 
         $methodParts = explode('.', $method, 2);
         if (count($methodParts) !== 2) {
+            $this->info('[error] method格式错误（应为：服务标识.方法名）');
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32600,
                 'message' => 'method格式错误（应为：服务标识.方法名）'
@@ -980,6 +996,7 @@ class Server
         list($serviceKey, $funcName) = $methodParts;
 
         if (!isset($this->enabledServices[$serviceKey])) {
+            $this->info("[error] 服务不存在（标识：{$serviceKey}），可用服务：" . implode(',', array_keys($this->enabledServices)));
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32601,
                 'message' => "服务不存在（标识：{$serviceKey}），可用服务：" . implode(',', array_keys($this->enabledServices))
@@ -993,6 +1010,7 @@ class Server
         $methodName = $contract[$funcName] ?? $funcName;
 
         if (!method_exists($serviceInstance, $methodName)) {
+            $this->info("[error] 服务{$serviceKey}不存在方法：{$methodName}");
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32601,
                 'message' => "服务{$serviceKey}不存在方法：{$methodName}"
@@ -1002,6 +1020,7 @@ class Server
         $paramRules = $service['metadata']['methods'][$methodName]['params'] ?? [];
         $paramValidation = $this->validateParams($params, $paramRules);
         if (!$paramValidation['valid']) {
+            $this->info("[error] ".$paramValidation['message']);
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32602,
                 'message' => $paramValidation['message']
@@ -1020,6 +1039,7 @@ class Server
             $endTime = microtime(true) * 1000;
             $isTimeout = ($endTime - $startTime) > $this->timeoutThreshold;
             $this->recordRequestStats($serviceKey, $isTimeout, true);
+            $this->info("[error] "."方法调用异常：{$e->getMessage()}");
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32603,
                 'message' => "方法调用异常：{$e->getMessage()}"
@@ -1039,6 +1059,7 @@ class Server
             return $rule['required'];
         }));
         if (count($params) < $requiredCount) {
+            $this->info("[error] "."参数数量不足（至少需要{$requiredCount}个必填参数）");
             return [
                 'valid' => false,
                 'message' => "参数数量不足（至少需要{$requiredCount}个必填参数）"
@@ -1058,6 +1079,7 @@ class Server
             $actualType = $typeMap[$paramType] ?? $paramType;
 
             if ($actualType !== $expectedType && $expectedType !== 'mixed') {
+                $this->info("[error] "."参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）");
                 return [
                     'valid' => false,
                     'message' => "参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）"
