@@ -476,12 +476,32 @@ class Server
             $streamActivity = stream_select($streamRead, $streamWrite, $streamExcept, 0, 100000);
         }
 
-        // 处理错误
+        // 处理错误 此方法会导致异常退出错误逐层向上传递，导致整个进程异常退出
+//        if ($socketActivity === false && $streamActivity === false) {
+//            $errorCode = \socket_last_error();
+//            if ($errorCode != \SOCKET_EINTR) {
+//                $this->info("[TCP] select错误：" . \socket_strerror($errorCode) );
+//            }
+//            return;
+//        }
+
+        # 新的处理方式为，接收到异常退出信号直接忽略，进行下一次的循环监听
+        // 处理错误（关键修改）
+        $isInterrupted = false;
         if ($socketActivity === false && $streamActivity === false) {
             $errorCode = \socket_last_error();
-            if ($errorCode != \SOCKET_EINTR) {
-                $this->info("[TCP] select错误：" . \socket_strerror($errorCode) );
+            if ($errorCode == \SOCKET_EINTR) {
+                // 标记为系统中断，不视为错误
+                $isInterrupted = true;
+                $this->info("[TCP] 系统调用被中断（EINTR），继续运行");
+            } else {
+                $this->info("[TCP] select错误：" . \socket_strerror($errorCode));
+                return; // 非中断错误，退出当前处理
             }
+        }
+
+        // 如果是系统中断，不处理后续逻辑，直接返回但不终止循环
+        if ($isInterrupted) {
             return;
         }
 
