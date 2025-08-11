@@ -464,44 +464,55 @@ class Server
             }
         }
 
+        # 处理连接被系统中断的问题。
         // 处理Socket事件（超时100ms）
         $socketActivity = false;
+        $socketError = false;
+        $socketErrno = 0;
         if (!empty($socketRead) || !empty($socketWrite) || !empty($socketExcept)) {
-            $socketActivity = \socket_select($socketRead, $socketWrite, $socketExcept, 0, 100000);
+            $socketActivity = @\socket_select($socketRead, $socketWrite, $socketExcept, 0, 100000);
+            if ($socketActivity === false) {
+                $socketErrno = \socket_last_error();
+                $socketError = true;
+            }
         }
 
         // 处理流事件（超时100ms）
         $streamActivity = false;
+        $streamError = false;
+        $streamErrno = 0;
         if (!empty($streamRead) || !empty($streamWrite) || !empty($streamExcept)) {
-            $streamActivity = stream_select($streamRead, $streamWrite, $streamExcept, 0, 100000);
-        }
-
-        // 处理错误 此方法会导致异常退出错误逐层向上传递，导致整个进程异常退出
-//        if ($socketActivity === false && $streamActivity === false) {
-//            $errorCode = \socket_last_error();
-//            if ($errorCode != \SOCKET_EINTR) {
-//                $this->info("[TCP] select错误：" . \socket_strerror($errorCode) );
-//            }
-//            return;
-//        }
-
-        # 新的处理方式为，接收到异常退出信号直接忽略，进行下一次的循环监听
-        // 处理错误（关键修改）
-        $isInterrupted = false;
-        if ($socketActivity === false && $streamActivity === false) {
-            $errorCode = \socket_last_error();
-            if ($errorCode == \SOCKET_EINTR) {
-                // 标记为系统中断，不视为错误
-                $isInterrupted = true;
-                $this->info("[TCP] 系统调用被中断（EINTR），继续运行");
-            } else {
-                $this->info("[TCP] select错误：" . \socket_strerror($errorCode));
-                return; // 非中断错误，退出当前处理
+            $streamActivity = @\stream_select($streamRead, $streamWrite, $streamExcept, 0, 100000);
+            if ($streamActivity === false) {
+                $streamErrno = \errno(); // stream_select的错误用errno()获取
+                $streamError = true;
             }
         }
 
-        // 如果是系统中断，不处理后续逻辑，直接返回但不终止循环
+        // 判断是否为中断错误（EINTR）
+        $isInterrupted = false;
+        // 处理socket_select的错误
+        if ($socketError) {
+            if ($socketErrno == \SOCKET_EINTR) {
+                $isInterrupted = true;
+            } else {
+                $this->info("[TCP] socket_select错误：" . \socket_strerror($socketErrno));
+                return; // 非中断错误，退出
+            }
+        }
+        // 处理stream_select的错误
+        if ($streamError) {
+            if ($streamErrno == 4) { // EINTR对应的错误码是4
+                $isInterrupted = true;
+            } else {
+                $this->info("[TCP] stream_select错误：" . \error_get_last()['message']);
+                return; // 非中断错误，退出
+            }
+        }
+
+        // 如果是中断，重置流数组并返回（避免下一次循环使用被修改的数组）
         if ($isInterrupted) {
+            $this->info("[TCP] 系统调用被中断（EINTR），继续运行");
             return;
         }
 
