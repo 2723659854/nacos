@@ -14,12 +14,12 @@ use Throwable;
  * 2. 基于超时率的服务降级（动态调整权重）
  * 3. 基于错误率的服务熔断（通过控制心跳实现）
  * 4. 每个服务独立统计与调整逻辑
- * 5. 支持配置监听（优化后支持长连接复用）
+ * 5. 支持配置监听
  * @purpose 微服务服务端
  * @author yanglong
  * @time 2025年7月26日
  */
-class Server
+class ServerCopy
 {
 
     /** 配置参数 */
@@ -167,23 +167,23 @@ class Server
 
         \stream_set_blocking($socket, false);
 
-        // 构造HTTP请求（启用长连接）
+        // 构造HTTP请求
         $request = "POST {$path} HTTP/1.1\r\n";
         $request .= "Host: {$host}\r\n";
         $request .= "Content-Type: application/x-www-form-urlencoded\r\n";
         $request .= "Content-Length: " . strlen($params) . "\r\n";
         $request .= "Long-Pulling-Timeout: 30000\r\n";
-        $request .= "Connection: keep-alive\r\n";  // 启用长连接
-        $request .= "Keep-Alive: 60\r\n";          // 保持连接超时时间
-        $request .= "\r\n";                        // 空行分隔头和体
+        $request .= "Connection: close\r\n\r\n"; // 每次请求后关闭连接
         $request .= $params;
+
+        //todo 发送请求 这里为什么是立即发送，为什么不是等待连接可写的时候才发送呢?已知这个接口/nacos/v1/cs/configs/listener会阻塞30秒
+        fwrite($socket, $request);
 
         $streamId = (int)$socket;
         $this->configStreams[$streamId] = [
             'socket' => $socket,
             'name' => $name,
-            'startTime' => time(),
-            'sendBuffer' => $request  // 放入发送缓冲区，等待可写事件
+            'startTime' => time()
         ];
         $this->configStreamMap[$name] = $socket;
 
@@ -191,7 +191,7 @@ class Server
     }
 
     /**
-     * 处理配置监听响应（优化连接复用）
+     * 处理配置监听响应（修复单次监测后停止的问题）
      */
     private function processConfigResponse($socket, string $name)
     {
@@ -205,7 +205,7 @@ class Server
             // 读取响应数据
             while (!feof($socket)) {
                 $buffer = fread($socket, 4096);
-                if ($buffer === false || $buffer ==="") {
+                if ($buffer === false) {
                     break;
                 }
                 $responseData .= $buffer;
@@ -319,72 +319,26 @@ class Server
         } catch (Exception $e) {
             $this->info("[config] {$name} 处理异常：{$e->getMessage()} ");
             $this->configListen[$name]['retry'] = time() + 3;
-            // 异常情况下需要关闭连接
+        } finally {
+            //todo 为什么处理结束就关闭连接，这样子处理会不断地新建和销毁连接，是否存在资源浪费，为什么不采用长链接呢
             if (is_resource($socket)) {
                 fclose($socket);
             }
             unset($this->configStreams[$streamId], $this->configStreamMap[$name]);
-            $this->startConfigListenStream($name);
-            return;
         }
 
-        // 正常处理完成后复用连接
-        if (is_resource($socket) && !feof($socket)) {
-            // 准备下一次请求
-            $this->prepareNextRequest($socket, $name);
-        } else {
-            $this->info("[config] {$name} 连接无法复用，释放连接 ");
-            // 连接无效时重建
-            if (is_resource($socket)) {
-                fclose($socket);
-            }
-            unset($this->configStreams[$streamId], $this->configStreamMap[$name]);
-            $this->startConfigListenStream($name);
+        // 无论是否发生配置变更，都重建监听流
+        $retryDelay = $this->configListen[$name]['retryDelay'] ?? 1;
+        // 配置变更后使用稍长延迟
+        if ($configChanged) {
+            $retryDelay = 2;
         }
+        usleep($retryDelay * 1000000);
+
+        // 强制启动新的监听流
+        $this->startConfigListenStream($name);
     }
 
-    /**
-     * 准备下一次长轮询请求（复用现有连接）
-     */
-    private function prepareNextRequest($socket, string $name)
-    {
-        $streamId = (int)$socket;
-        $config = $this->configListen[$name];
-
-        // 构建新的监听配置
-        $listeningConfig = implode(self::WORD_SEPARATOR, [
-                $config['dataId'],
-                $config['group'],
-                md5($config['content'] ?? '')
-            ]) . self::LINE_SEPARATOR;
-
-        $token = $this->nacosClient->getToken();
-        $params = http_build_query([
-            'Listening-Configs' => $listeningConfig,
-            'tenant' => $config['tenant'] ?? 'public',
-            'timeout' => 30000, // 30秒超时
-            'accessToken' => $token
-        ]);
-
-        // 构造新的HTTP请求
-        $urlParts = parse_url($this->serverConfig['host']);
-        $host = $urlParts['host'];
-
-        $request = "POST /nacos/v1/cs/configs/listener HTTP/1.1\r\n";
-        $request .= "Host: {$host}\r\n";
-        $request .= "Content-Type: application/x-www-form-urlencoded\r\n";
-        $request .= "Content-Length: " . strlen($params) . "\r\n";
-        $request .= "Long-Pulling-Timeout: 30000\r\n";
-        $request .= "Connection: keep-alive\r\n";
-        $request .= "Keep-Alive: 60\r\n";
-        $request .= "\r\n";
-        $request .= $params;
-
-        // 更新流信息，准备发送下一次请求
-        $this->configStreams[$streamId]['startTime'] = time();
-        $this->configStreams[$streamId]['sendBuffer'] = $request;
-        $this->info("[config] 准备复用连接，{$name} 下一次监听（ID: {$streamId}）");
-    }
 
     /**
      * 重试失败的配置监听流（加强频率控制）
@@ -420,24 +374,6 @@ class Server
             $this->startConfigListenStream($name);
             unset($this->configListen[$name]['retry']);
             $retryCount++;
-        }
-    }
-
-    /**
-     * 连接保活机制
-     */
-    private function keepAliveConnections()
-    {
-        $now = time();
-        foreach ($this->configStreams as $streamId => $info) {
-            $socket = $info['socket'];
-            // 检查连接是否超过55秒未活动（接近Keep-Alive超时）
-            if ($now - $info['startTime'] > 55 && !isset($info['sendBuffer'])) {
-                // 发送空数据保持连接
-                fwrite($socket, "\r\n");
-                $this->configStreams[$streamId]['startTime'] = $now;
-                $this->info("[config] 发送保活数据包（ID: {$streamId}）");
-            }
         }
     }
 
@@ -482,6 +418,8 @@ class Server
         return $body;
     }
 
+
+
     /**
      * 初始化配置监听
      */
@@ -523,10 +461,6 @@ class Server
         // 添加配置监听Socket
         foreach ($this->configStreams as $info) {
             $streamRead[] = $info['socket'];
-            // 有发送缓冲区的流需要检查可写事件
-            if (!empty($info['sendBuffer'])) {
-                $streamWrite[] = $info['socket'];
-            }
         }
 
         // 收集可写Socket
@@ -623,38 +557,12 @@ class Server
             }
         }
 
-        // 处理配置监听流的发送缓冲区
-        foreach ($streamWrite as $socket) {
-            $streamId = (int)$socket;
-            if (isset($this->configStreams[$streamId]['sendBuffer'])) {
-                $buffer = $this->configStreams[$streamId]['sendBuffer'];
-                $bytesWritten = fwrite($socket, $buffer);
-
-                if ($bytesWritten === false) {
-                    // 发送失败
-                    $info = $this->configStreams[$streamId];
-                    $this->info("[config] 发送失败（{$info['name']}），准备重试");
-                    fclose($socket);
-                    unset($this->configStreams[$streamId], $this->configStreamMap[$info['name']]);
-                    $this->configListen[$info['name']]['retry'] = time() + 3;
-                } elseif ($bytesWritten === strlen($buffer)) {
-                    // 发送完成
-                    $this->configStreams[$streamId]['startTime'] = time();
-                    unset($this->configStreams[$streamId]['sendBuffer']);
-                    $this->info("[config] 请求发送完成（ID: {$streamId}）");
-                } else {
-                    // 部分发送，更新缓冲区
-                    $this->configStreams[$streamId]['sendBuffer'] = substr($buffer, $bytesWritten);
-                    $this->info("[config] 部分发送（ID: {$streamId}，已发送: {$bytesWritten}/" . strlen($buffer) . "）");
-                }
-            }
-        }
-
         // 发送响应
         foreach ($socketWrite as $socket) {
             $this->sendClientResponse($socket);
         }
     }
+
 
     /**
      * 验证配置合法性
@@ -955,8 +863,6 @@ class Server
         $lastHeartbeatTime = 0;
         $lastCheckTime = 0;
         $checkInterval = 5; // 健康检查间隔（秒）
-        $lastKeepAliveTime = 0;
-        $keepAliveInterval = 10; // 连接保活检查间隔（秒）
 
         while (true) {
             $now = time();
@@ -973,12 +879,6 @@ class Server
                     $this->checkHealthStatus($serviceKey);
                 }
                 $lastCheckTime = $now;
-            }
-
-            // 定期检查连接保活
-            if ($now - $lastKeepAliveTime >= $keepAliveInterval) {
-                $this->keepAliveConnections();
-                $lastKeepAliveTime = $now;
             }
 
             // 处理配置监听流重试
@@ -1284,9 +1184,7 @@ class Server
 
         // 关闭配置监听流
         foreach ($this->configStreams as $info) {
-            if (is_resource($info['socket'])) {
-                fclose($info['socket']);
-            }
+            fclose($info['stream']);
         }
 
         // 注销服务实例
@@ -1385,39 +1283,21 @@ class Server
     {
         $service = $this->enabledServices[$serviceKey];
         $stats = $this->requestStats[$serviceKey];
-        $coolDownPassed = ($now - $stats['lastHealthAdjust']) >= $this->adjustCoolDown;
+        $coolDownPassed = ($now - $stats['lastHealthAdjust']) > $this->adjustCoolDown;
 
-        var_dump($serviceKey,$errorRate,date("Y-m-d H:i:s",$now));
         // 错误率≥50% 且 冷却时间已过 且 当前健康（需要熔断）
-        if ($errorRate >= 0.5 &&  $coolDownPassed ) {
-            if ($stats['currentHealthy']){
-                // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
-                $this->sendHeartbeat[$serviceKey] = false;
+        if ($errorRate >= 0.5 && $coolDownPassed && $stats['currentHealthy']) {
+            // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
+            $this->sendHeartbeat[$serviceKey] = false;
 
-                $this->info("[{$serviceKey} service] 触发熔断（错误率{$errorRate}），已停止发送心跳");
-                // 更新本地状态
-                $this->requestStats[$serviceKey]['currentHealthy'] = false;
-                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
-                return;
-            }else{
-                // 如果是不健康的并且停止发送了心跳
-                if (empty($this->requestStats[$serviceKey]["sleep"])){
-                    $this->requestStats[$serviceKey]["sleep"] = 1;
-                }else{
-                    $this->requestStats[$serviceKey]["sleep"]++;
-                }
-                # 连续10次检查
-                if ($this->requestStats[$serviceKey]["sleep"] >= 10){
-                    $this->requestStats[$serviceKey]["sleep"] = 0;
-                    $this->requestStats[$serviceKey]['window']['error'] =0;
-                    $this->info("[{$serviceKey} service] 尝试恢复健康，已恢复发送心跳");
-                    $this->handleTimeoutRate($serviceKey, 0.9, $now);
-                }
-            }
-
+            $this->info("[{$serviceKey} service] 触发熔断（错误率{$errorRate}），已停止发送心跳");
+            // 更新本地状态
+            $this->requestStats[$serviceKey]['currentHealthy'] = false;
+            $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
+            return;
         }
 
-        // 错误率<50% 且 冷却时间已过 且 当前不健康（需要恢复）服务处于不健康状态
+        // 错误率<50% 且 冷却时间已过 且 当前不健康（需要恢复）
         if ($errorRate < 0.5 && $coolDownPassed && !$stats['currentHealthy']) {
             // 恢复发送心跳（Nacos会在收到心跳后标记实例为健康）
             $this->sendHeartbeat[$serviceKey] = true;
@@ -1440,7 +1320,7 @@ class Server
         $service = $this->enabledServices[$serviceKey];
         $stats = $this->requestStats[$serviceKey];
         $originalWeight = (float)$this->instanceConfig['weight'];
-        $coolDownPassed = ($now - $stats['lastWeightAdjust']) >= $this->adjustCoolDown;
+        $coolDownPassed = ($now - $stats['lastWeightAdjust']) > $this->adjustCoolDown;
         $currentWeight = $stats['currentWeight'];
         $metadata = $service['metadata'];
         $ephemeral = true; // 统一使用临时实例
@@ -1451,13 +1331,12 @@ class Server
             if (abs($newWeight - $currentWeight) < 0.001) {
                 return;
             }
-
             $result = $this->nacosClient->updateWeight(
                 $service['nacosServiceName'],
+                $service['namespace'],
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $newWeight,
-                $service['namespace'],
                 $ephemeral,
                 $metadata
             );
@@ -1470,6 +1349,7 @@ class Server
             }
             return;
         }
+
         // 恢复逻辑：超时率下降时逐步恢复
         if ($coolDownPassed && $currentWeight < $originalWeight) {
             $recoveryFactor = 1 + (0.5 - $timeoutRate) * 2;
@@ -1480,10 +1360,10 @@ class Server
 
             $result = $this->nacosClient->updateWeight(
                 $service['nacosServiceName'],
+                $service['namespace'],
                 $this->instanceConfig['ip'],
                 $this->instanceConfig['port'],
                 $newWeight,
-                $service['namespace'],
                 $ephemeral,
                 $metadata
             );

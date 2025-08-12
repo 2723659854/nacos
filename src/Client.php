@@ -688,7 +688,6 @@ class Client
         $errorNo = curl_errno($ch);
         $errorMsg = curl_error($ch);
         curl_close($ch);
-
         // 处理响应
         if ($errorNo !== 0) {
             return ['code' => 400, 'msg' => "CURL错误[{$errorNo}]：{$errorMsg}", 'data' => ''];
