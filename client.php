@@ -11,7 +11,7 @@ use Xiaosongshu\Nacos\JsonRpcClient;
 $nacosConfig = [
     'host' => 'http://127.0.0.1:8848',
     'username' => 'nacos',
-    'password' => 'nacos@123456'
+    'password' => 'nacos'
 ];
 
 

@@ -1,14 +1,10 @@
-qq:
-  host: "ssl://smtp.qq.com:465"
-  user: "lantai171892716@foxmail.com"
-  password: "tcpqthckocgdbjfb"
+demo:
+  name: zhangsan
+  age: 12
+  sex: boy
 
-wangyi:
-  host: "ssl://smtp.163.com:465"
-  user: "lantai171892716@163.com"
-  password: "UZjcSi9ZuB7GGGaP"
-
-test:
-  host: "http://www.baidu.com"
-  user: "root"
-  password: "123456789"
+cache:
+  redis:
+    host: 127.0.0.1
+    auth: 1234564
+    port: 6379

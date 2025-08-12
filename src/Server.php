@@ -89,11 +89,11 @@ class Server
      * @param bool $isDebug 是否开启调试模式
      * @throws Exception
      */
-    public function __construct(array $config,bool $isDebug = true)
+    public function __construct(array $config, bool $isDebug = true)
     {
         $this->config = $config;
         $this->isDebug = $isDebug;
-        if ($this->isDebug){
+        if ($this->isDebug) {
             $this->info("[warn] 系统已启动debug模式，你可以设置isDebug=false关闭调试模式");
         }
         $this->validateConfig();
@@ -204,8 +204,9 @@ class Server
 
             // 读取响应数据
             while (!feof($socket)) {
-                $buffer = fread($socket, 4096);
-                if ($buffer === false || $buffer ==="") {
+                $buffer = @fread($socket, 4096);
+                # 不等待，没有消息直接跳过
+                if ($buffer === false || $buffer === "") {
                     break;
                 }
                 $responseData .= $buffer;
@@ -290,17 +291,21 @@ class Server
 
                         if ($configFromNacos['code'] == 200) {
                             $content = $configFromNacos['content'];
+                            if (stripos($content,"config data not exist") !== false) {
+                                $this->info("[warn] 配置{$name}不存在，请检查服务器上是否有正确的配置");
+                                break;
+                            }
                             if ($content !== $this->configListen[$name]['content']) {
                                 $this->configListen[$name]['content'] = $content;
 
                                 if ($config['callback'] && is_callable($config['callback'])) {
-                                    try{
+                                    try {
                                         call_user_func($config['callback'], $content);
-                                        $this->info("[info] 配置{$name}处理成功");
-                                    }catch (\Throwable $exception){
-                                        $this->info("[error] 配置{$name}处理失败，发生了异常：File:".$exception->getFile()." line:".$exception->getLine()." message:".$exception->getMessage());
+                                        $this->info("[info] 配置{$name}更新成功");
+                                    } catch (\Throwable $exception) {
+                                        $this->info("[error] 配置{$name}更新失败，发生了异常：File:" . $exception->getFile() . " line:" . $exception->getLine() . " message:" . $exception->getMessage());
                                     }
-                                }else{
+                                } else {
                                     $this->info("[warn] 配置{$name}发生了变化，但未处理，请检查是否设置了正确的回调函数");
                                 }
                             }
@@ -434,7 +439,7 @@ class Server
             // 检查连接是否超过55秒未活动（接近Keep-Alive超时）
             if ($now - $info['startTime'] > 55 && !isset($info['sendBuffer'])) {
                 // 发送空数据保持连接
-                fwrite($socket, "\r\n");
+                @fwrite($socket, "\r\n");
                 $this->configStreams[$streamId]['startTime'] = $now;
                 $this->info("[config] 发送保活数据包（ID: {$streamId}）");
             }
@@ -628,7 +633,7 @@ class Server
             $streamId = (int)$socket;
             if (isset($this->configStreams[$streamId]['sendBuffer'])) {
                 $buffer = $this->configStreams[$streamId]['sendBuffer'];
-                $bytesWritten = fwrite($socket, $buffer);
+                $bytesWritten = @fwrite($socket, $buffer);
 
                 if ($bytesWritten === false) {
                     // 发送失败
@@ -714,14 +719,14 @@ class Server
      */
     private function initNacosClient()
     {
-        try{
+        try {
             $this->nacosClient = new Client(
                 $this->serverConfig['host'],
                 $this->serverConfig['username'],
                 $this->serverConfig['password']
             );
-        }catch (\Exception $e){
-            $this->info("[error] 连接服务器失败：".$e->getMessage());
+        } catch (\Exception $e) {
+            $this->info("[error] 连接服务器失败：" . $e->getMessage());
             throw new Exception("服务启动失败");
         }
 
@@ -859,7 +864,7 @@ class Server
             if (empty($config['enable'])) {
                 continue;
             }
-            if (empty($config['publish'])){
+            if (empty($config['publish'])) {
                 continue;
             }
             if (!empty($config['content'])) {
@@ -902,16 +907,16 @@ class Server
      */
     private function info(string $message)
     {
-        $message = date('Y-m-d H:i:s')." ".trim($message);
-        if ($this->isDebug){
+        $message = date('Y-m-d H:i:s') . " " . trim($message);
+        if ($this->isDebug) {
             echo $message;
             echo "\n";
         }
         if (isset($this->log) && is_callable($this->log)) {
-            try{
+            try {
                 call_user_func($this->log, $message);
-            }catch (\Throwable $exception){
-                echo "日志处理异常：".$exception->getMessage();
+            } catch (\Throwable $exception) {
+                echo "日志处理异常：" . $exception->getMessage();
                 echo "\n";
             }
         }
@@ -1056,7 +1061,7 @@ class Server
         $clientId = (int)$socket;
         $clientAddr = $this->clientAddresses[$clientId] ?? "未知";
 
-        $data = \socket_read($socket, 4096);
+        $data = @\socket_read($socket, 4096);
         if ($data === false) {
             $errorCode = \socket_last_error($socket);
             $errorMsg = in_array($errorCode, [\SOCKET_ECONNRESET, \SOCKET_ETIMEDOUT])
@@ -1090,10 +1095,10 @@ class Server
 
         while (!empty($this->writeBuffers[$clientId])) {
             $response = array_shift($this->writeBuffers[$clientId]);
-            $bytesWritten = \socket_write($socket, $response);
+            $bytesWritten = @\socket_write($socket, $response);
 
             if ($bytesWritten === false) {
-                $this->info("[tcp] 发送失败（{$clientAddr}）：" . \socket_strerror(\socket_last_error($socket)) );
+                $this->info("[tcp] 发送失败（{$clientAddr}）：" . \mb_convert_encoding(\socket_strerror(\socket_last_error($socket)), 'UTF-8', 'GBK'));
                 $this->closeClient($socket);
                 break;
             }
@@ -1116,13 +1121,13 @@ class Server
     {
         $request = json_decode($jsonData, true);
         if (json_last_error() !== JSON_ERROR_NONE) {
-            $this->info("[error] ".self::ERROR_PARSE["message"]);
+            $this->info("[error] " . self::ERROR_PARSE["message"]);
             return $this->buildJsonRpcResponse(null, self::ERROR_PARSE);
         }
 
         if (!isset($request['jsonrpc']) || $request['jsonrpc'] !== self::JSON_RPC_VERSION
             || !isset($request['method']) || !isset($request['id'])) {
-            $this->info("[error] ".self::ERROR_INVALID_REQUEST["message"]);
+            $this->info("[error] " . self::ERROR_INVALID_REQUEST["message"]);
             return $this->buildJsonRpcResponse($request['id'] ?? null, self::ERROR_INVALID_REQUEST);
         }
 
@@ -1165,7 +1170,7 @@ class Server
         $paramRules = $service['metadata']['methods'][$methodName]['params'] ?? [];
         $paramValidation = $this->validateParams($params, $paramRules);
         if (!$paramValidation['valid']) {
-            $this->info("[error] ".$paramValidation['message']);
+            $this->info("[error] " . $paramValidation['message']);
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32602,
                 'message' => $paramValidation['message']
@@ -1184,7 +1189,7 @@ class Server
             $endTime = microtime(true) * 1000;
             $isTimeout = ($endTime - $startTime) > $this->timeoutThreshold;
             $this->recordRequestStats($serviceKey, $isTimeout, true);
-            $this->info("[error] "."方法调用异常：{$e->getMessage()}");
+            $this->info("[error] " . "方法调用异常：{$e->getMessage()}");
             return $this->buildJsonRpcResponse($requestId, [
                 'code' => -32603,
                 'message' => "方法调用异常：{$e->getMessage()}"
@@ -1204,7 +1209,7 @@ class Server
             return $rule['required'];
         }));
         if (count($params) < $requiredCount) {
-            $this->info("[error] "."参数数量不足（至少需要{$requiredCount}个必填参数）");
+            $this->info("[error] " . "参数数量不足（至少需要{$requiredCount}个必填参数）");
             return [
                 'valid' => false,
                 'message' => "参数数量不足（至少需要{$requiredCount}个必填参数）"
@@ -1224,7 +1229,7 @@ class Server
             $actualType = $typeMap[$paramType] ?? $paramType;
 
             if ($actualType !== $expectedType && $expectedType !== 'mixed') {
-                $this->info("[error] "."参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）");
+                $this->info("[error] " . "参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）");
                 return [
                     'valid' => false,
                     'message' => "参数{$rule['name']}类型错误（期望{$expectedType}，实际{$actualType}）"
@@ -1385,39 +1390,21 @@ class Server
     {
         $service = $this->enabledServices[$serviceKey];
         $stats = $this->requestStats[$serviceKey];
-        $coolDownPassed = ($now - $stats['lastHealthAdjust']) >= $this->adjustCoolDown;
+        $coolDownPassed = ($now - $stats['lastHealthAdjust']) > $this->adjustCoolDown;
 
-        var_dump($serviceKey,$errorRate,date("Y-m-d H:i:s",$now));
         // 错误率≥50% 且 冷却时间已过 且 当前健康（需要熔断）
-        if ($errorRate >= 0.5 &&  $coolDownPassed ) {
-            if ($stats['currentHealthy']){
-                // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
-                $this->sendHeartbeat[$serviceKey] = false;
+        if ($errorRate >= 0.5 && $coolDownPassed && $stats['currentHealthy']) {
+            // 停止发送心跳（Nacos会在心跳超时后标记实例为不健康）
+            $this->sendHeartbeat[$serviceKey] = false;
 
-                $this->info("[{$serviceKey} service] 触发熔断（错误率{$errorRate}），已停止发送心跳");
-                // 更新本地状态
-                $this->requestStats[$serviceKey]['currentHealthy'] = false;
-                $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
-                return;
-            }else{
-                // 如果是不健康的并且停止发送了心跳
-                if (empty($this->requestStats[$serviceKey]["sleep"])){
-                    $this->requestStats[$serviceKey]["sleep"] = 1;
-                }else{
-                    $this->requestStats[$serviceKey]["sleep"]++;
-                }
-                # 连续10次检查
-                if ($this->requestStats[$serviceKey]["sleep"] >= 10){
-                    $this->requestStats[$serviceKey]["sleep"] = 0;
-                    $this->requestStats[$serviceKey]['window']['error'] =0;
-                    $this->info("[{$serviceKey} service] 尝试恢复健康，已恢复发送心跳");
-                    $this->handleTimeoutRate($serviceKey, 0.9, $now);
-                }
-            }
-
+            $this->info("[{$serviceKey} service] 触发熔断（错误率{$errorRate}），已停止发送心跳");
+            // 更新本地状态
+            $this->requestStats[$serviceKey]['currentHealthy'] = false;
+            $this->requestStats[$serviceKey]['lastHealthAdjust'] = $now;
+            return;
         }
 
-        // 错误率<50% 且 冷却时间已过 且 当前不健康（需要恢复）服务处于不健康状态
+        // 错误率<50% 且 冷却时间已过 且 当前不健康（需要手动恢复）
         if ($errorRate < 0.5 && $coolDownPassed && !$stats['currentHealthy']) {
             // 恢复发送心跳（Nacos会在收到心跳后标记实例为健康）
             $this->sendHeartbeat[$serviceKey] = true;

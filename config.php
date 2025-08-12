@@ -6,15 +6,15 @@ return [
     'server' => [
         'host' => 'http://127.0.0.1:8848',
         'username' => 'nacos',
-        'password' => 'nacos@123456',
+        'password' => 'nacos',
         'heartbeat_interval' => 5, // 心跳间隔（秒，默认5秒）
     ],
 
     /** 服务提供者实例的配置 */
     'instance' => [
-        'ip' => '192.168.110.72',
+        'ip' => '127.0.0.1',
         'port' => '8000',
-        'weight' => 100, // 初始权重（降级时会动态调整）
+        'weight' => 80, // 初始权重（降级时会动态调整）
         'timeout_threshold' => 1000, // 超时阈值（毫秒，超过此时间视为超时，用于计算超时率）
     ],
 
@@ -31,7 +31,8 @@ return [
              # 是否开启监听
             'enable' => true,
             # 是否将本地配置发布到服务器
-            'publish'=> false,
+            //todo 需要处理服务器上配置不存在的情况
+            'publish'=> true,
             'dataId' => 'default',
             'group' => 'default',
             # 需要配监听的配置文件
@@ -39,7 +40,6 @@ return [
             # 监听到配置发生变化的回调
             'callback' => function ($content) {
                 file_put_contents(__DIR__ . "/application.yaml", $content);
-                // todo 重新加载配置，刷新应用
             }
         ],
     ],
