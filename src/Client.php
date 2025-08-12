@@ -52,13 +52,19 @@ class Client
             'username' => $this->user,
             'password' => $this->pass
         ], ['Content-Type' => 'application/x-www-form-urlencoded']);
-
         $loginResult = $this->dealResponse($response);
         if (empty($loginResult) || $loginResult['code'] != 200) {
             $errorMsg = $loginResult['message'] ?? '登录失败：未知错误';
             throw new \Exception($errorMsg);
         }
-
+        if (empty($loginResult['content']['accessToken'])){
+            $errorMsg = $loginResult['content'] ?? '登录失败：未知错误';
+            throw new \Exception($errorMsg);
+        }
+        if (empty($loginResult['content']['tokenTtl'])){
+            $errorMsg = $loginResult['content'] ?? '登录失败：未知错误';
+            throw new \Exception($errorMsg);
+        }
         $this->token = $loginResult['content']['accessToken'];
         $this->tokenExpireTime = time() + $loginResult['content']['tokenTtl'] - 60; // 提前60秒过期
     }

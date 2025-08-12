@@ -1,12 +1,14 @@
-app=demo
-debug=true
+qq:
+  host: "ssl://smtp.qq.com:465"
+  user: "lantai171892716@foxmail.com"
+  password: "tcpqthckocgdbjfb"
 
-DB_HOST=127.0.0.1
-DB_PORT=3306
-DB_USER=root
-DB_PASS=root
-DB_DATABASE=demo
+wangyi:
+  host: "ssl://smtp.163.com:465"
+  user: "lantai171892716@163.com"
+  password: "UZjcSi9ZuB7GGGaP"
 
-REDIS_HOST=127.0.0.1
-REDIS_PORT=6379
-REDIS_PASS=1234563333
+test:
+  host: "http://www.baidu.com"
+  user: "root"
+  password: "123456"

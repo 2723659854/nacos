@@ -294,9 +294,15 @@ class Server
                                 $this->configListen[$name]['content'] = $content;
 
                                 if ($config['callback'] && is_callable($config['callback'])) {
-                                    call_user_func($config['callback'], $content);
+                                    try{
+                                        call_user_func($config['callback'], $content);
+                                        $this->info("[info] 配置{$name}处理成功");
+                                    }catch (\Throwable $exception){
+                                        $this->info("[error] 配置{$name}处理失败，发生了异常：File:".$exception->getFile()." line:".$exception->getLine()." message:".$exception->getMessage());
+                                    }
+                                }else{
+                                    $this->info("[warn] 配置{$name}发生了变化，但未处理，请检查是否设置了正确的回调函数");
                                 }
-                                file_put_contents($config['file'], $content);
                             }
                         }
                         break; // 处理完匹配的变更后跳出循环
@@ -615,11 +621,17 @@ class Server
      */
     private function initNacosClient()
     {
-        $this->nacosClient = new Client(
-            $this->serverConfig['host'],
-            $this->serverConfig['username'],
-            $this->serverConfig['password']
-        );
+        try{
+            $this->nacosClient = new Client(
+                $this->serverConfig['host'],
+                $this->serverConfig['username'],
+                $this->serverConfig['password']
+            );
+        }catch (\Exception $e){
+            $this->info("[error] 连接服务器失败：".$e->getMessage());
+            throw new Exception("服务启动失败");
+        }
+
     }
 
     /**
@@ -752,6 +764,9 @@ class Server
     {
         foreach ($this->configListen as $name => $config) {
             if (empty($config['enable'])) {
+                continue;
+            }
+            if (empty($config['publish'])){
                 continue;
             }
             if (!empty($config['content'])) {

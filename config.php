@@ -6,7 +6,7 @@ return [
     'server' => [
         'host' => 'http://127.0.0.1:8848',
         'username' => 'nacos',
-        'password' => 'nacos',
+        'password' => 'nacos@123456',
         'heartbeat_interval' => 5, // 心跳间隔（秒，默认5秒）
     ],
 
@@ -30,6 +30,8 @@ return [
         'app' => [
              # 是否开启监听
             'enable' => true,
+            # 是否将本地配置发布到服务器
+            'publish'=> false,
             'dataId' => 'default',
             'group' => 'default',
             # 需要配监听的配置文件

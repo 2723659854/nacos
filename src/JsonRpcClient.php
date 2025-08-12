@@ -52,11 +52,16 @@ class JsonRpcClient
      */
     public function __construct(array $nacosConfig, string $namespace = 'public', int $timeout = 5)
     {
-        $this->nacosClient = new Client(
-            $nacosConfig['host'] ?? 'http://127.0.0.1:8848',
-            $nacosConfig['username'] ?? 'nacos',
-            $nacosConfig['password'] ?? 'nacos'
-        );
+        try{
+            $this->nacosClient = new Client(
+                $nacosConfig['host'] ?? 'http://127.0.0.1:8848',
+                $nacosConfig['username'] ?? 'nacos',
+                $nacosConfig['password'] ?? 'nacos'
+            );
+        }catch (\Exception $e){
+            throw new \Exception("连接服务器失败，详情：".$e->getMessage());
+        }
+
 
         $this->namespace = $namespace;
         $this->timeout = $timeout;
