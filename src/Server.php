@@ -94,7 +94,7 @@ class Server
         $this->config = $config;
         $this->isDebug = $isDebug;
         if ($this->isDebug){
-            $this->info("[warn]系统已启动debug模式，你可以设置isDebug=false关闭调试模式");
+            $this->info("[warn] 系统已启动debug模式，你可以设置isDebug=false关闭调试模式");
         }
         $this->validateConfig();
         $this->initConfig();
