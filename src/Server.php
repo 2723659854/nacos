@@ -544,53 +544,32 @@ class Server
 
         # 处理连接被系统中断的问题。
         // 处理Socket事件（超时100ms）
-        $socketActivity = false;
         $socketError = false;
-        $socketErrno = 0;
         if (!empty($socketRead) || !empty($socketWrite) || !empty($socketExcept)) {
             $socketActivity = @\socket_select($socketRead, $socketWrite, $socketExcept, 0, 100000);
             if ($socketActivity === false) {
-                $socketErrno = \socket_last_error();
                 $socketError = true;
             }
         }
 
         // 处理流事件（超时100ms）
-        $streamActivity = false;
         $streamError = false;
-        $streamErrno = 0;
         if (!empty($streamRead) || !empty($streamWrite) || !empty($streamExcept)) {
             $streamActivity = @\stream_select($streamRead, $streamWrite, $streamExcept, 0, 100000);
             if ($streamActivity === false) {
-                $streamErrno = \errno(); // stream_select的错误用errno()获取
                 $streamError = true;
             }
         }
 
-        // 判断是否为中断错误（EINTR）
-        $isInterrupted = false;
+        # 不论是任何错误，都直接跳过，防止进程退出
         // 处理socket_select的错误
         if ($socketError) {
-            if ($socketErrno == \SOCKET_EINTR) {
-                $isInterrupted = true;
-            } else {
-                $this->info("[TCP] socket_select错误：" . \socket_strerror($socketErrno));
-                return; // 非中断错误，退出
-            }
+            $this->info("[TCP] socket_select轮训错误，被系统中断，但继续执行");
+            return;
         }
         // 处理stream_select的错误
         if ($streamError) {
-            if ($streamErrno == 4) { // EINTR对应的错误码是4
-                $isInterrupted = true;
-            } else {
-                $this->info("[TCP] stream_select错误：" . \error_get_last()['message']);
-                return; // 非中断错误，退出
-            }
-        }
-
-        // 如果是中断，重置流数组并返回（避免下一次循环使用被修改的数组）
-        if ($isInterrupted) {
-            $this->info("[TCP] 系统调用被中断（EINTR），继续运行");
+            $this->info("[TCP] stream_select轮训错误，被系统中断，但继续执行" );
             return;
         }
 
